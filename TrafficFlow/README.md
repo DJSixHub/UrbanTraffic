@@ -1,134 +1,139 @@
-# TrafficFlow – Infraestructura Batch sobre Hadoop/Spark
+# UrbanTraffic / TrafficFlow – Streaming Data Lab
 
-Este proyecto provee un entorno reproducible para trabajar con el dataset de tráfico del Department for Transport (DfT) del Reino Unido utilizando HDFS, YARN y Spark (batch). Los objetivos cubiertos en esta fase son:
-
-1. **Infraestructura funcional**: cluster Hadoop + Spark listo para ejecutar jobs de MapReduce/Spark.
-2. **Carga inicial**: ingestión de un subconjunto del dataset en HDFS.
-3. **Limpieza y transformación básica**: job batch que normaliza los datos crudos hacia una zona *silver*.
-4. **Consultas exploratorias**: job batch con agregaciones iniciales por región, autoridad local y tipo de carretera.
-
-> El análisis en tiempo real y los componentes de streaming se abordarán en fases posteriores.
+Este repositorio contiene un entorno reproducible basado en Docker para generar, almacenar y visualizar datos sintéticos de tráfico utilizando Hadoop (HDFS + YARN), Spark y un dashboard Streamlit. El productor escribe continuamente en HDFS mediante WebHDFS y también deja una copia local para depuración.
 
 ## Requisitos
 
-- Docker 24+
+- Docker Desktop (o Docker Engine) 24+
 - Docker Compose v2
-- Python 3.12+ (solo para utilidades locales)
-- Dataset CSV ubicado en `BD_Proyecto/` (carpeta existente en el repositorio)
+- Opcional: Python 3.11+ si deseas ejecutar utilidades fuera de los contenedores
 
-## Estructura
+## Vista general del stack
+
+Servicios definidos en `docker-compose.yml`:
+
+- `namenode` / `datanode`: HDFS 3.2 con WebHDFS habilitado
+- `resourcemanager` / `nodemanager`: YARN para ejecutar jobs batch (Spark)
+- `spark-master` / `spark-worker`: Spark 3.2 listo para `spark-submit`
+- `producer`: generador sintético de tráfico que rota archivos y los sube a HDFS
+- `dashboard`: aplicación Streamlit que lee HDFS en tiempo casi real y refresca cada 2 s
+
+## Estructura del repositorio
 
 ```
 TrafficFlow/
-  docker-compose.yml        # Define HDFS, YARN y Spark (master + worker)
+  docker-compose.yml          # Orquestación de todo el stack
   analytics/
     jobs/
-      data_cleaning.py      # Limpieza y enriquecimiento del dataset crudo -> silver (Parquet)
-      exploratory_queries.py # Consultas iniciales sobre el dataset silver
+      data_cleaning.py        # Ejemplo de job Spark batch
+      exploratory_queries.py  # Consultas exploratorias sobre los datos limpios
+  producer_service/
+    app/main.py               # Lógica del productor y writers (file/HDFS)
+  dashboard/
+    app.py                    # Dashboard Streamlit apuntando a WebHDFS
+    requirements.txt          # Dependencias del contenedor de dashboard
   data/
-    raw/                    # Carpeta local donde colocar el CSV crudo (se monta en los contenedores)
-    silver/                 # Carpeta local usada para exportar resultados (opcional)
+    synthetic/                # Salida local del productor (bind mount)
 BD_Proyecto/
-  dft_traffic_counts_raw_counts.csv
-  local_authority_traffic.csv
-  region_traffic.csv
+  ...                         # CSV originales si deseas experimentos batch
 ```
 
-## 1. Levantar la infraestructura
-
-Desde la raíz del repositorio:
+## Puesta en marcha rápida
 
 ```powershell
 cd TrafficFlow
-docker compose up -d
+docker compose up -d --build
 ```
 
-Servicios disponibles:
+La primera vez el dashboard instalará dependencias (incluye matplotlib) y los contenedores de Hadoop tardan unos segundos en salir de *safe mode*. Mientras tanto verás mensajes `Name node is in safe mode`. Vuelve a intentarlo tras ~30 s; el productor reintentará automáticamente.
 
+Servicios expuestos:
+
+- Dashboard → http://localhost:8501
 - NameNode UI → http://localhost:9870
 - ResourceManager UI → http://localhost:8088
 - Spark Master UI → http://localhost:8080
 
-## 2. Copiar un subset del dataset a HDFS
-
-1. Copia el CSV crudo al volumen local (solo la primera vez):
-
-   ```powershell
-   Copy-Item ..\BD_Proyecto\dft_traffic_counts_raw_counts.csv .\data\raw\
-   ```
-
-2. Crea la carpeta en HDFS y sube el archivo (puedes tomar un subset con `Select-Object` si deseas reducir tamaño):
-
-   ```powershell
-   # Crear carpeta destino en HDFS
-   docker compose exec namenode hdfs dfs -mkdir -p /data/raw
-
-   # Subir el CSV crudo (editar la ruta si generaste un subset)
-   docker compose exec namenode hdfs dfs -put -f /data/raw/dft_traffic_counts_raw_counts.csv /data/raw/
-   ```
-
-## 3. Ejecutar la limpieza básica (Spark batch)
-
-El job lee el CSV crudo, castea columnas, calcula métricas derivadas y guarda el resultado en formato Parquet particionado por año y región.
+## Verificando que todo corre
 
 ```powershell
+# Logs del productor (confirmar cargas a HDFS)
+docker compose logs producer --tail 50
+
+# Logs del dashboard
+docker compose logs dashboard --tail 20
+
+# Archivos generados en HDFS (WebHDFS path)
+docker compose exec namenode hdfs dfs -ls /data/gold/synthetic
+
+# Contenido local (útil para inspección rápida)
+Get-Content data/synthetic/traffic_stream.jsonl -Tail 5
+```
+
+El dashboard muestra:
+
+- Conteos del número de registros y vehículos en la ventana móvil (15 min)
+- Serie temporal de vehículos por minuto (resample de los eventos)
+- Barras y gráficos de pastel por región y tipo de vehículo
+- Selector de región para ver el desglose de vehículos pesados/ligeros
+
+## Ejecutar jobs Spark batch
+
+Los ejemplos de `analytics/jobs` siguen disponibles. Primero asegúrate de tener datos en HDFS (puedes utilizar los CSV de `BD_Proyecto` o reutilizar los archivos *gold* generados por el productor).
+
+```powershell
+# Limpieza a silver (ejemplo)
 docker compose exec spark-master \
   spark-submit \
     --master yarn \
     --deploy-mode client \
     /opt/spark-apps/data_cleaning.py \
-    --input-path hdfs:///data/raw/dft_traffic_counts_raw_counts.csv \
-    --output-path hdfs:///data/silver/dft_traffic_clean \
-    --repartition 24
-```
+    --input-path hdfs:///data/gold/synthetic \
+    --output-path hdfs:///data/silver/traffic_clean
 
-Los datos limpios quedarán en `hdfs:///data/silver/dft_traffic_clean/`.
-
-## 4. Consultas exploratorias iniciales
-
-El siguiente job calcula KPIs básicos (top regiones, densidad promedio, ranking de autoridades locales y estadísticas por tipo de carretera).
-
-```powershell
+# Consultas exploratorias
 docker compose exec spark-master \
   spark-submit \
     --master yarn \
     --deploy-mode client \
     /opt/spark-apps/exploratory_queries.py \
-    --input-path hdfs:///data/silver/dft_traffic_clean \
-    --top-n 10
+    --input-path hdfs:///data/silver/traffic_clean
 ```
 
-Las salidas se muestran en consola de Spark. Opcionalmente, puedes persistir los resultados en HDFS añadiendo `--output-path hdfs:///data/silver/analytics`.
+Ajusta `--input-path` según el origen deseado (raw, silver o gold).
 
-## 5. Apagar la infraestructura
+## Detener y limpiar
 
 ```powershell
+# Detener servicios preservando datos de HDFS y el archivo local
+docker compose down
+
+# Detener y eliminar volúmenes HDFS (reinicio limpio)
 docker compose down -v
 ```
 
-Esto eliminará contenedores y volúmenes HDFS. Si deseas conservar los datos, omite `-v`.
+Los datos locales en `data/synthetic/traffic_stream.jsonl` se mantienen porque es un bind mount. Para limpiar ese archivo manualmente:
 
-## 6. Dashboard en tiempo real (opcional)
+```powershell
+Clear-Content data/synthetic/traffic_stream.jsonl
+```
 
-1. Instala las dependencias locales (solo una vez):
+## Variables relevantes
 
-  ```powershell
-  cd TrafficFlow
-  python -m venv .venv
-  .venv\Scripts\Activate.ps1
-  pip install -r dashboard/requirements.txt
-  ```
+- `RATE_PER_MINUTE`: ritmo de generación del productor (registros/minuto)
+- `ROTATE_RECORDS`: cuántos registros antes de subir un nuevo archivo a HDFS
+- `HDFS_BASE_PATH`: ruta base donde aterrizan los archivos en HDFS (`/data/gold/synthetic` por defecto)
+- `STREAM_WINDOW_MINUTES`: ventana mostrada en el dashboard (15 min)
+- `STREAM_REFRESH_SECONDS`: intervalo fijo de refresco del dashboard (2 s)
 
-2. Asegúrate de que el productor esté generando datos (`docker compose up -d` → el archivo `data/synthetic/traffic_stream.jsonl`).
+Puedes ajustar estos valores en `docker-compose.yml` y volver a levantar con `docker compose up -d --build`.
 
-3. Ejecuta el dashboard Streamlit:
+## Troubleshooting
 
-  ```powershell
-  streamlit run dashboard/app.py
-  ```
-
-  La página se refresca automáticamente y muestra totales por minuto, acumulados por región y la tabla más reciente en una ventana deslizante (configurable desde la barra lateral).
+- **Safe mode**: si ves `Name node is in safe mode`, espera unos segundos o ejecuta `docker compose logs namenode --tail 20` para confirmar que haya salido.
+- **Dashboard vacío**: confirma que el productor está escribiendo (`docker compose logs producer --tail 50`) y que existen archivos bajo `/data/gold/synthetic/dt=YYYYMMDD`.
+- **Puertos ocupados**: cierra servicios que usen 8501/9870/8088/8080 antes de levantar el stack.
 
 ---
 
-Con esta base, la siguiente fase consistirá en añadir el productor distribuido, la cola de mensajería y el dashboard unificado que combine métricas batch y streaming.
+Este documento se mantiene alineado con la rama `reset-main`. Si cambias la arquitectura (por ejemplo, añades Kafka u otros consumidores), actualiza este README y `docker-compose.yml` en conjunto.
