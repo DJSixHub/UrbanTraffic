@@ -92,13 +92,33 @@ services:
     networks:
       - hadoop
 
+  hdfs-bootstrap:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: tf-hdfs-bootstrap
+    depends_on:
+      - namenode
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+    command:
+      - /bin/bash
+      - /bootstrap/bootstrap_hdfs.sh
+    volumes:
+      - ./scripts/bootstrap_hdfs.sh:/bootstrap/bootstrap_hdfs.sh:ro
+    restart: "no"
+    networks:
+      - hadoop
+
   producer:
     build:
       context: ./producer_service
     container_name: tf-producer
     depends_on:
-      - spark-master
-      - namenode
+      namenode:
+        condition: service_started
+      spark-master:
+        condition: service_started
+      hdfs-bootstrap:
+        condition: service_completed_successfully
     environment:
       - PROFILES_PATH=/opt/producer/profiles/distributions.json
       - OUTPUT_PATH=/opt/producer/output/traffic_stream.jsonl
@@ -120,8 +140,12 @@ services:
       context: ./dashboard
     container_name: tf-dashboard
     depends_on:
-      - namenode
-      - producer
+      namenode:
+        condition: service_started
+      producer:
+        condition: service_started
+      hdfs-bootstrap:
+        condition: service_completed_successfully
     environment:
       - WEBHDFS_URL=http://namenode:9870
       - HDFS_USER=hdfs

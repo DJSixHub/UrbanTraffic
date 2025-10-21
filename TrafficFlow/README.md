@@ -15,6 +15,7 @@ Servicios definidos en `docker-compose.yml`:
 - `namenode` / `datanode`: HDFS 3.2 con WebHDFS habilitado
 - `resourcemanager` / `nodemanager`: YARN para ejecutar jobs batch (Spark)
 - `spark-master` / `spark-worker`: Spark 3.2 listo para `spark-submit`
+- `hdfs-bootstrap`: job efímero que prepara `/data/gold/synthetic` en HDFS
 - `producer`: generador sintético de tráfico que rota archivos y los sube a HDFS
 - `dashboard`: aplicación Streamlit que lee HDFS en tiempo casi real y refresca cada 2 s
 
@@ -46,6 +47,8 @@ docker compose up -d --build
 ```
 
 La primera vez el dashboard instalará dependencias (incluye matplotlib) y los contenedores de Hadoop tardan unos segundos en salir de *safe mode*. Mientras tanto verás mensajes `Name node is in safe mode`. Vuelve a intentarlo tras ~30 s; el productor reintentará automáticamente.
+
+Un contenedor auxiliar `hdfs-bootstrap` espera a que HDFS salga de *safe mode* y crea la jerarquía `/data/gold/synthetic`, ajustando su propiedad a `hdfs:hdfs`. Así evitamos pasos manuales después de un reinicio limpio (`docker compose down -v`).
 
 Servicios expuestos:
 
