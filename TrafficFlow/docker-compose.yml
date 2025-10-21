@@ -1,0 +1,142 @@
+services:
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: tf-namenode
+    environment:
+      - CLUSTER_NAME=trafficflow
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    volumes:
+      - namenode:/hadoop/dfs/name
+      - ./data:/data
+    networks:
+      - hadoop
+
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: tf-datanode
+    depends_on:
+      - namenode
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+      - SERVICE_PRECONDITION=namenode:9870
+    volumes:
+      - datanode:/hadoop/dfs/data
+      - ./data:/data
+    networks:
+      - hadoop
+
+  resourcemanager:
+    image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
+    container_name: tf-resourcemanager
+    depends_on:
+      - namenode
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+      - YARN_CONF_yarn_resourcemanager_hostname=resourcemanager
+      - YARN_CONF_yarn_resourcemanager_address=resourcemanager:8032
+      - YARN_CONF_yarn_resourcemanager_scheduler_address=resourcemanager:8030
+      - YARN_CONF_yarn_resourcemanager_resource_tracker_address=resourcemanager:8031
+      - SERVICE_PRECONDITION=namenode:9870
+    ports:
+      - "8088:8088"
+    networks:
+      - hadoop
+
+  nodemanager:
+    image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
+    container_name: tf-nodemanager
+    depends_on:
+      - resourcemanager
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+      - YARN_CONF_yarn_resourcemanager_hostname=resourcemanager
+      - SERVICE_PRECONDITION=resourcemanager:8088
+    networks:
+      - hadoop
+
+  spark-master:
+    image: bde2020/spark-master:3.2.1-hadoop3.2
+    container_name: tf-spark-master
+    depends_on:
+      - namenode
+      - resourcemanager
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+      - SPARK_MASTER_HOST=spark-master
+      - INIT_DAEMON_STEP=setup_spark
+      - ENABLE_INIT_DAEMON=false
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    volumes:
+      - ./analytics/jobs:/opt/spark-apps
+      - ./data:/data
+    networks:
+      - hadoop
+
+  spark-worker:
+    image: bde2020/spark-worker:3.2.1-hadoop3.2
+    container_name: tf-spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+    volumes:
+      - ./analytics/jobs:/opt/spark-apps
+      - ./data:/data
+    networks:
+      - hadoop
+
+  producer:
+    build:
+      context: ./producer_service
+    container_name: tf-producer
+    depends_on:
+      - spark-master
+      - namenode
+    environment:
+      - PROFILES_PATH=/opt/producer/profiles/distributions.json
+      - OUTPUT_PATH=/opt/producer/output/traffic_stream.jsonl
+      - RATE_PER_MINUTE=1500
+      - PRODUCER_SINK=file,hdfs
+      - ROTATE_RECORDS=500
+      - WEBHDFS_URL=http://namenode:9870
+      - HDFS_USER=hdfs
+      - HDFS_BASE_PATH=/data/gold/synthetic
+    volumes:
+      - ./analytics/jobs/producer:/opt/producer/profiles:ro
+      - ./data/synthetic:/opt/producer/output
+    restart: unless-stopped
+    networks:
+      - hadoop
+
+  dashboard:
+    build:
+      context: ./dashboard
+    container_name: tf-dashboard
+    depends_on:
+      - namenode
+      - producer
+    environment:
+      - WEBHDFS_URL=http://namenode:9870
+      - HDFS_USER=hdfs
+      - HDFS_BASE_PATH=/data/gold/synthetic
+      - STREAM_WINDOW_MINUTES=15
+      - STREAM_REFRESH_SECONDS=2
+    ports:
+      - "8501:8501"
+    networks:
+      - hadoop
+
+networks:
+  hadoop:
+    driver: bridge
+
+volumes:
+  namenode:
+  datanode:

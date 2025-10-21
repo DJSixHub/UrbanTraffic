@@ -1,0 +1,2086 @@
+{
+  "meta": {
+    "generated_at": "2025-10-19T02:35:00.579480+00:00",
+    "input_path": "hdfs://namenode:8020/data/silver/dft_traffic_clean",
+    "min_observations": 50
+  },
+  "region_distribution": {
+    "South East": {
+      "probability": 0.15614095017468274,
+      "region_id": "9"
+    },
+    "North West": {
+      "probability": 0.12624565831008205,
+      "region_id": "5"
+    },
+    "South West": {
+      "probability": 0.0932399323297852,
+      "region_id": "1"
+    },
+    "West Midlands": {
+      "probability": 0.09168065465298712,
+      "region_id": "10"
+    },
+    "East of England": {
+      "probability": 0.09696707294851185,
+      "region_id": "7"
+    },
+    "Yorkshire and The Humber": {
+      "probability": 0.08466999603582075,
+      "region_id": "8"
+    },
+    "London": {
+      "probability": 0.10054853886240744,
+      "region_id": "6"
+    },
+    "East Midlands": {
+      "probability": 0.08011956492498261,
+      "region_id": "2"
+    },
+    "Scotland": {
+      "probability": 0.06476484194294525,
+      "region_id": "3"
+    },
+    "Wales": {
+      "probability": 0.061049375603699836,
+      "region_id": "4"
+    },
+    "North East": {
+      "probability": 0.04457341421409512,
+      "region_id": "11"
+    }
+  },
+  "local_authority_distribution": {
+    "South East": [
+      {
+        "id": "199",
+        "name": "Isle of Wight",
+        "latitude_mean": 50.68801815567942,
+        "latitude_std": 0.050055190949104864,
+        "longitude_mean": -1.254568427526132,
+        "longitude_std": 0.07953521323559144,
+        "probability": 0.011195630973278721
+      },
+      {
+        "id": "83",
+        "name": "Buckinghamshire",
+        "latitude_mean": 51.69975144724514,
+        "latitude_std": 0.13806948646690403,
+        "longitude_mean": -0.7157121288167485,
+        "longitude_std": 0.14582095015515417,
+        "probability": 0.06428710747025551
+      },
+      {
+        "id": "180",
+        "name": "Bracknell Forest",
+        "latitude_mean": 51.39598950525311,
+        "latitude_std": 0.025901077940718754,
+        "longitude_mean": -0.7487958070886076,
+        "longitude_std": 0.031805441608939854,
+        "probability": 0.012326896820752878
+      },
+      {
+        "id": "136",
+        "name": "Brighton and Hove",
+        "latitude_mean": 50.844981380333365,
+        "latitude_std": 0.01940165545662468,
+        "longitude_mean": -0.15387622660784317,
+        "longitude_std": 0.037927937124626845,
+        "probability": 0.01989467524868344
+      },
+      {
+        "id": "137",
+        "name": "Southampton",
+        "latitude_mean": 50.920966885115725,
+        "latitude_std": 0.015112979754261057,
+        "longitude_mean": -1.4039549369675919,
+        "longitude_std": 0.031097843815292424,
+        "probability": 0.016851960210649504
+      },
+      {
+        "id": "179",
+        "name": "Windsor and Maidenhead",
+        "latitude_mean": 51.493670100903074,
+        "latitude_std": 0.07187220054302397,
+        "longitude_mean": -0.7007588799343188,
+        "longitude_std": 0.1004464705989739,
+        "probability": 0.023756582796957287
+      },
+      {
+        "id": "112",
+        "name": "Slough",
+        "latitude_mean": 51.505026994576255,
+        "latitude_std": 0.010467367977967912,
+        "longitude_mean": -0.5892608893220339,
+        "longitude_std": 0.044636385499482636,
+        "probability": 0.009206163448410376
+      },
+      {
+        "id": "114",
+        "name": "Reading",
+        "latitude_mean": 51.452219744590145,
+        "latitude_std": 0.007725448614799327,
+        "longitude_mean": -0.9744308201967216,
+        "longitude_std": 0.016588888549844024,
+        "probability": 0.011897795982055783
+      },
+      {
+        "id": "80",
+        "name": "Kent",
+        "latitude_mean": 51.2715054074161,
+        "latitude_std": 0.11179437123150887,
+        "longitude_mean": 0.6735312685596102,
+        "longitude_std": 0.394098899642961,
+        "probability": 0.18388921396528185
+      },
+      {
+        "id": "113",
+        "name": "Wokingham",
+        "latitude_mean": 51.43962443319152,
+        "latitude_std": 0.03921948760467196,
+        "longitude_mean": -0.8872538354468072,
+        "longitude_std": 0.04688449677550838,
+        "probability": 0.01833430856251219
+      },
+      {
+        "id": "82",
+        "name": "Portsmouth",
+        "latitude_mean": 50.82163200250596,
+        "latitude_std": 0.019299035142893054,
+        "longitude_mean": -1.0710942045390068,
+        "longitude_std": 0.020329301211291957,
+        "probability": 0.01650087770626097
+      },
+      {
+        "id": "67",
+        "name": "West Berkshire",
+        "latitude_mean": 51.4294785407958,
+        "latitude_std": 0.03797140712485892,
+        "longitude_mean": -1.2583869372318335,
+        "longitude_std": 0.1360301565499606,
+        "probability": 0.022547298615174564
+      },
+      {
+        "id": "135",
+        "name": "Surrey",
+        "latitude_mean": 51.29318315686671,
+        "latitude_std": 0.07870840649872055,
+        "longitude_mean": -0.4689302217364657,
+        "longitude_std": 0.19583371913987985,
+        "probability": 0.1527598985761654
+      },
+      {
+        "id": "64",
+        "name": "Medway",
+        "latitude_mean": 51.38686306157548,
+        "latitude_std": 0.02316370451378491,
+        "longitude_mean": 0.5205662385995624,
+        "longitude_std": 0.036237094377933605,
+        "probability": 0.017827189389506535
+      },
+      {
+        "id": "191",
+        "name": "Milton Keynes",
+        "latitude_mean": 52.05866540676117,
+        "latitude_std": 0.047319319977382104,
+        "longitude_mean": -0.7261072018623488,
+        "longitude_std": 0.049468634219494885,
+        "probability": 0.01927052857421494
+      },
+      {
+        "id": "81",
+        "name": "West Sussex",
+        "latitude_mean": 50.960393362880865,
+        "latitude_std": 0.11187335035222902,
+        "longitude_mean": -0.3827071996066329,
+        "longitude_std": 0.21981244448114423,
+        "probability": 0.10115077043105129
+      },
+      {
+        "id": "133",
+        "name": "East Sussex",
+        "latitude_mean": 50.895959520699726,
+        "latitude_std": 0.09275341520634696,
+        "longitude_mean": 0.24981145755434805,
+        "longitude_std": 0.20335210129105233,
+        "probability": 0.05742149405110201
+      },
+      {
+        "id": "65",
+        "name": "Hampshire",
+        "latitude_mean": 51.054177274553396,
+        "latitude_std": 0.1680068942458217,
+        "longitude_mean": -1.2246402450551925,
+        "longitude_std": 0.265585465094681,
+        "probability": 0.1554905402769651
+      },
+      {
+        "id": "142",
+        "name": "Oxfordshire",
+        "latitude_mean": 51.75972604296478,
+        "latitude_std": 0.1323883935441347,
+        "longitude_mean": -1.2726815085107337,
+        "longitude_std": 0.1664768850821761,
+        "probability": 0.08539106690072167
+      }
+    ],
+    "North West": [
+      {
+        "id": "85",
+        "name": "Manchester",
+        "latitude_mean": 53.454784996205134,
+        "latitude_std": 0.04533781982258147,
+        "longitude_mean": -2.23954782996337,
+        "longitude_std": 0.030512712112313826,
+        "probability": 0.06585665924204534
+      },
+      {
+        "id": "196",
+        "name": "Tameside",
+        "latitude_mean": 53.47107266787575,
+        "latitude_std": 0.01714161494109727,
+        "longitude_mean": -2.0907570267535074,
+        "longitude_std": 0.04010512019352173,
+        "probability": 0.02407507176687225
+      },
+      {
+        "id": "162",
+        "name": "Oldham",
+        "latitude_mean": 53.54609315735073,
+        "latitude_std": 0.019306901767591717,
+        "longitude_mean": -2.101808803470149,
+        "longitude_std": 0.05319593487869086,
+        "probability": 0.025860197328744543
+      },
+      {
+        "id": "207",
+        "name": "Cheshire",
+        "latitude_mean": 53.218283574289245,
+        "latitude_std": 0.08384510768181573,
+        "longitude_mean": -2.5254303804676934,
+        "longitude_std": 0.2661368696330289,
+        "probability": 0.07840078481195874
+      },
+      {
+        "id": "161",
+        "name": "Liverpool",
+        "latitude_mean": 53.41305418254442,
+        "latitude_std": 0.024676886829334034,
+        "longitude_mean": -2.9543510573748,
+        "longitude_std": 0.04015039741605567,
+        "probability": 0.05972933636751072
+      },
+      {
+        "id": "84",
+        "name": "Wirral",
+        "latitude_mean": 53.383855060177346,
+        "latitude_std": 0.0332820268492151,
+        "longitude_mean": -3.0524531374624844,
+        "longitude_std": 0.046240586237693504,
+        "probability": 0.03536478477979431
+      },
+      {
+        "id": "95",
+        "name": "Rochdale",
+        "latitude_mean": 53.59610203266663,
+        "latitude_std": 0.024054239596566492,
+        "longitude_mean": -2.1702855199999997,
+        "longitude_std": 0.045548079522937136,
+        "probability": 0.02894798208441553
+      },
+      {
+        "id": "75",
+        "name": "Wigan",
+        "latitude_mean": 53.517090458061915,
+        "latitude_std": 0.03283553306658468,
+        "longitude_mean": -2.5917956189367435,
+        "longitude_std": 0.07469619749660841,
+        "probability": 0.0358472511478679
+      },
+      {
+        "id": "77",
+        "name": "Cumbria",
+        "latitude_mean": 54.52505134568256,
+        "latitude_std": 0.24939926379365024,
+        "longitude_mean": -2.971130798634885,
+        "longitude_std": 0.30866665258583587,
+        "probability": 0.08906329154638512
+      },
+      {
+        "id": "90",
+        "name": "Salford",
+        "latitude_mean": 53.49722060135235,
+        "latitude_std": 0.016241746727119984,
+        "longitude_mean": -2.3318763862633465,
+        "longitude_std": 0.05125180555592454,
+        "probability": 0.04067191482860382
+      },
+      {
+        "id": "192",
+        "name": "Sefton",
+        "latitude_mean": 53.49887385678931,
+        "latitude_std": 0.060324056843704975,
+        "longitude_mean": -2.9846304844481595,
+        "longitude_std": 0.03317115579295724,
+        "probability": 0.028851488810800813
+      },
+      {
+        "id": "91",
+        "name": "Trafford",
+        "latitude_mean": 53.43571767222628,
+        "latitude_std": 0.027303082130456003,
+        "longitude_mean": -2.3244049423357667,
+        "longitude_std": 0.03512036985900248,
+        "probability": 0.026439156970432854
+      },
+      {
+        "id": "56",
+        "name": "Stockport",
+        "latitude_mean": 53.39748089473825,
+        "latitude_std": 0.024039089489415497,
+        "longitude_mean": -2.15960116695302,
+        "longitude_std": 0.0445284730371812,
+        "probability": 0.03594374442148262
+      },
+      {
+        "id": "148",
+        "name": "West Cheshire",
+        "latitude_mean": 53.229988259834585,
+        "latitude_std": 0.044444585782686404,
+        "longitude_mean": -2.7753014429323324,
+        "longitude_std": 0.16847499224512874,
+        "probability": 0.03208401347689388
+      },
+      {
+        "id": "73",
+        "name": "East Cheshire",
+        "latitude_mean": 53.20921419122091,
+        "latitude_std": 0.10611898499942216,
+        "longitude_mean": -2.3441109730232568,
+        "longitude_std": 0.1325452341017887,
+        "probability": 0.03319368612346314
+      },
+      {
+        "id": "193",
+        "name": "Blackpool",
+        "latitude_mean": 53.81495486218621,
+        "latitude_std": 0.022001273719597897,
+        "longitude_mean": -3.0345932814979752,
+        "longitude_std": 0.019229996336477803,
+        "probability": 0.011916919291417728
+      },
+      {
+        "id": "198",
+        "name": "Blackburn with Darwen",
+        "latitude_mean": 53.73115798115279,
+        "latitude_std": 0.03139667888916354,
+        "longitude_mean": -2.4772396751742614,
+        "longitude_std": 0.027575022573251586,
+        "probability": 0.01799599552914499
+      },
+      {
+        "id": "157",
+        "name": "Knowsley",
+        "latitude_mean": 53.42408991745099,
+        "latitude_std": 0.03682291020610473,
+        "longitude_mean": -2.8378773940686286,
+        "longitude_std": 0.03694869598466914,
+        "probability": 0.019684627817402562
+      },
+      {
+        "id": "158",
+        "name": "St. Helens",
+        "latitude_mean": 53.45361910435945,
+        "latitude_std": 0.0255439712931737,
+        "longitude_mean": -2.708664367036328,
+        "longitude_std": 0.053389013189767416,
+        "probability": 0.02523299105024887
+      },
+      {
+        "id": "156",
+        "name": "Halton",
+        "latitude_mean": 53.33936045184689,
+        "latitude_std": 0.023622188578130393,
+        "longitude_mean": -2.7023508886936933,
+        "longitude_std": 0.038807404643262,
+        "probability": 0.021421506742467494
+      },
+      {
+        "id": "74",
+        "name": "Warrington",
+        "latitude_mean": 53.400035663795634,
+        "latitude_std": 0.028095871931134133,
+        "longitude_mean": -2.5626754256204376,
+        "longitude_std": 0.05164073614496703,
+        "probability": 0.039658735455649276
+      },
+      {
+        "id": "86",
+        "name": "Bury",
+        "latitude_mean": 53.57103419054625,
+        "latitude_std": 0.036649933835905736,
+        "longitude_mean": -2.2942431981932767,
+        "longitude_std": 0.024195241448128974,
+        "probability": 0.022965399120302987
+      },
+      {
+        "id": "160",
+        "name": "Bolton",
+        "latitude_mean": 53.56855928717707,
+        "latitude_std": 0.02206757254222653,
+        "longitude_mean": -2.443892997990429,
+        "longitude_std": 0.04831219720577022,
+        "probability": 0.04033418837095231
+      },
+      {
+        "id": "76",
+        "name": "Lancashire",
+        "latitude_mean": 53.78238800076902,
+        "latitude_std": 0.13292016523572595,
+        "longitude_mean": -2.6011990040558746,
+        "longitude_std": 0.24152541089496918,
+        "probability": 0.1604602729151422
+      }
+    ],
+    "South West": [
+      {
+        "id": "68",
+        "name": "Wiltshire",
+        "latitude_mean": 51.302362039050955,
+        "latitude_std": 0.16040604728505506,
+        "longitude_mean": -1.9710858364182309,
+        "longitude_std": 0.19863280689583312,
+        "probability": 0.12183172197543768
+      },
+      {
+        "id": "144",
+        "name": "Bristol, City of",
+        "latitude_mean": 51.46086143725369,
+        "latitude_std": 0.023814352875941754,
+        "longitude_mean": -2.6006481608251226,
+        "longitude_std": 0.04250415855153691,
+        "probability": 0.05304415991638359
+      },
+      {
+        "id": "1",
+        "name": "Isles of Scilly",
+        "latitude_mean": 49.915761177272714,
+        "latitude_std": 0.0023879562164435615,
+        "longitude_mean": -6.305080912727273,
+        "longitude_std": 0.00696124623841165,
+        "probability": 0.0014371570420695062
+      },
+      {
+        "id": "115",
+        "name": "Bath and North East Somerset",
+        "latitude_mean": 51.3675105491132,
+        "latitude_std": 0.03706325085686864,
+        "longitude_mean": -2.4172981653207537,
+        "longitude_std": 0.07521178361480782,
+        "probability": 0.03462241964985628
+      },
+      {
+        "id": "139",
+        "name": "Cornwall excluding Isles of Scilly",
+        "latitude_mean": 50.36414946020921,
+        "latitude_std": 0.16272040367012855,
+        "longitude_mean": -4.87089134033608,
+        "longitude_std": 0.35922518762651995,
+        "probability": 0.10301802978834597
+      },
+      {
+        "id": "138",
+        "name": "Dorset",
+        "latitude_mean": 50.7773890335933,
+        "latitude_std": 0.10867383377780881,
+        "longitude_mean": -2.233154454205332,
+        "longitude_std": 0.2935196533271782,
+        "probability": 0.06617454925529136
+      },
+      {
+        "id": "182",
+        "name": "Bournemouth",
+        "latitude_mean": 50.74436202288893,
+        "latitude_std": 0.01511505110119583,
+        "longitude_mean": -1.8643792766111127,
+        "longitude_std": 0.033935800855102484,
+        "probability": 0.023517115233864645
+      },
+      {
+        "id": "143",
+        "name": "South Gloucestershire",
+        "latitude_mean": 51.5103574767048,
+        "latitude_std": 0.04410386201441838,
+        "longitude_mean": -2.504041600205949,
+        "longitude_std": 0.0807005529371263,
+        "probability": 0.05709432976221584
+      },
+      {
+        "id": "200",
+        "name": "Poole",
+        "latitude_mean": 50.74393177175073,
+        "latitude_std": 0.019774839410146638,
+        "longitude_mean": -1.9691660527299701,
+        "longitude_std": 0.02513665972473377,
+        "probability": 0.02201463287170107
+      },
+      {
+        "id": "203",
+        "name": "Plymouth",
+        "latitude_mean": 50.389895998883254,
+        "latitude_std": 0.01785664582284365,
+        "longitude_mean": -4.126855508375636,
+        "longitude_std": 0.02730936211575206,
+        "probability": 0.025738176117062972
+      },
+      {
+        "id": "209",
+        "name": "Bournemouth, Christchurch and Poole",
+        "latitude_mean": 50.74309575,
+        "latitude_std": 0.017119088711508756,
+        "longitude_mean": -1.8833992687499999,
+        "longitude_std": 0.07809607956613218,
+        "probability": 0.0020904102430101905
+      },
+      {
+        "id": "5",
+        "name": "Somerset",
+        "latitude_mean": 51.089506551591995,
+        "latitude_std": 0.11783937193331724,
+        "longitude_mean": -2.8067262841061305,
+        "longitude_std": 0.28287870774836943,
+        "probability": 0.12679644630258688
+      },
+      {
+        "id": "70",
+        "name": "Gloucestershire",
+        "latitude_mean": 51.83475522857899,
+        "latitude_std": 0.09626412311505692,
+        "longitude_mean": -2.1510240411761585,
+        "longitude_std": 0.19128641819721473,
+        "probability": 0.12274627645675464
+      },
+      {
+        "id": "183",
+        "name": "North Somerset",
+        "latitude_mean": 51.38740351405192,
+        "latitude_std": 0.05856098144182921,
+        "longitude_mean": -2.80896196714571,
+        "longitude_std": 0.1122983209516553,
+        "probability": 0.0327279853671283
+      },
+      {
+        "id": "184",
+        "name": "Torbay",
+        "latitude_mean": 50.44371157706385,
+        "latitude_std": 0.03076009774049888,
+        "longitude_mean": -3.563439253063831,
+        "longitude_std": 0.024080013580900707,
+        "probability": 0.015351450222106088
+      },
+      {
+        "id": "71",
+        "name": "Devon",
+        "latitude_mean": 50.704090113424314,
+        "latitude_std": 0.21622977873423305,
+        "longitude_mean": -3.697973254709373,
+        "longitude_std": 0.31882592878826876,
+        "probability": 0.16520773451789914
+      },
+      {
+        "id": "181",
+        "name": "Swindon",
+        "latitude_mean": 51.563662864375004,
+        "latitude_std": 0.032242766805516895,
+        "longitude_mean": -1.7536701704166655,
+        "longitude_std": 0.03173706855201729,
+        "probability": 0.025084922916122288
+      },
+      {
+        "id": "210",
+        "name": "Dorset",
+        "latitude_mean": 50.72052643478262,
+        "latitude_std": 0.0990824702698086,
+        "longitude_mean": -2.339409808695652,
+        "longitude_std": 0.29963220898625315,
+        "probability": 0.0015024823621635746
+      }
+    ],
+    "West Midlands": [
+      {
+        "id": "149",
+        "name": "Wolverhampton",
+        "latitude_mean": 52.578755136746416,
+        "latitude_std": 0.014063552745392366,
+        "longitude_mean": -2.112194549665072,
+        "longitude_std": 0.029315230846245918,
+        "probability": 0.02777039596066968
+      },
+      {
+        "id": "151",
+        "name": "Solihull",
+        "latitude_mean": 52.42682897798838,
+        "latitude_std": 0.0400171710421335,
+        "longitude_mean": -1.7393005083559008,
+        "longitude_std": 0.05475473659597541,
+        "probability": 0.03434759500398618
+      },
+      {
+        "id": "190",
+        "name": "Sandwell",
+        "latitude_mean": 52.518275303844945,
+        "latitude_std": 0.025104192385389627,
+        "longitude_mean": -2.0030729431487337,
+        "longitude_std": 0.03820056322469121,
+        "probability": 0.04198777571086899
+      },
+      {
+        "id": "72",
+        "name": "Warwickshire",
+        "latitude_mean": 52.35349016667888,
+        "latitude_std": 0.12962129373354903,
+        "longitude_mean": -1.5773029408108106,
+        "longitude_std": 0.16745648184225645,
+        "probability": 0.14503056072282752
+      },
+      {
+        "id": "116",
+        "name": "Shropshire",
+        "latitude_mean": 52.71196515817672,
+        "latitude_std": 0.16493076452277403,
+        "longitude_mean": -2.6639585596744206,
+        "longitude_std": 0.20384221559073218,
+        "probability": 0.07141908052086102
+      },
+      {
+        "id": "69",
+        "name": "Worcestershire",
+        "latitude_mean": 52.27168221193336,
+        "latitude_std": 0.10887935743897503,
+        "longitude_mean": -2.1392312977666665,
+        "longitude_std": 0.13175484092957224,
+        "probability": 0.13951634334307733
+      },
+      {
+        "id": "141",
+        "name": "Birmingham",
+        "latitude_mean": 52.48601839292654,
+        "latitude_std": 0.039781883681643856,
+        "longitude_mean": -1.8797707625280198,
+        "longitude_std": 0.055206603840549436,
+        "probability": 0.10669678448046771
+      },
+      {
+        "id": "140",
+        "name": "Stoke-on-Trent",
+        "latitude_mean": 53.01230701932004,
+        "latitude_std": 0.031179525190945245,
+        "longitude_mean": -2.1695732487104338,
+        "longitude_std": 0.03251172650020125,
+        "probability": 0.05667020993887856
+      },
+      {
+        "id": "189",
+        "name": "Dudley",
+        "latitude_mean": 52.48380925853951,
+        "latitude_std": 0.03283551200249438,
+        "longitude_mean": -2.097198716542473,
+        "longitude_std": 0.04620995560996904,
+        "probability": 0.04457879351581185
+      },
+      {
+        "id": "187",
+        "name": "Telford and Wrekin",
+        "latitude_mean": 52.69452267596277,
+        "latitude_std": 0.040365028646638226,
+        "longitude_mean": -2.4468196215527955,
+        "longitude_std": 0.043108831711946974,
+        "probability": 0.021392505979271857
+      },
+      {
+        "id": "155",
+        "name": "Herefordshire, County of",
+        "latitude_mean": 52.08112353780345,
+        "latitude_std": 0.1142944210171503,
+        "longitude_mean": -2.679703540809248,
+        "longitude_std": 0.15618244725502695,
+        "probability": 0.045973956949242625
+      },
+      {
+        "id": "150",
+        "name": "Walsall",
+        "latitude_mean": 52.59532493972399,
+        "latitude_std": 0.027346243602340968,
+        "longitude_mean": -1.9852143301910825,
+        "longitude_std": 0.04768523891018505,
+        "probability": 0.03129152272123306
+      },
+      {
+        "id": "117",
+        "name": "Staffordshire",
+        "latitude_mean": 52.80206947660363,
+        "latitude_std": 0.16451341717526202,
+        "longitude_mean": -2.007231056173404,
+        "longitude_std": 0.19184372746831807,
+        "probability": 0.2038267339888387
+      },
+      {
+        "id": "152",
+        "name": "Coventry",
+        "latitude_mean": 52.40540764450451,
+        "latitude_std": 0.016302950612087246,
+        "longitude_mean": -1.5005200168018018,
+        "longitude_std": 0.03176673277084098,
+        "probability": 0.029497741163964922
+      }
+    ],
+    "East of England": [
+      {
+        "id": "97",
+        "name": "Cambridgeshire",
+        "latitude_mean": 52.28479513624937,
+        "latitude_std": 0.13791228166395564,
+        "longitude_mean": 0.0573702731571072,
+        "longitude_std": 0.20856351886412416,
+        "probability": 0.12594287030396933
+      },
+      {
+        "id": "58",
+        "name": "Central Bedfordshire",
+        "latitude_mean": 51.98293236264705,
+        "latitude_std": 0.08104648151242082,
+        "longitude_mean": -0.4710635141470587,
+        "longitude_std": 0.12964955438338863,
+        "probability": 0.021356895712393804
+      },
+      {
+        "id": "123",
+        "name": "Essex",
+        "latitude_mean": 51.73850513009529,
+        "latitude_std": 0.12898839149149494,
+        "longitude_mean": 0.5031791212957616,
+        "longitude_std": 0.28077444185922096,
+        "probability": 0.2048953355074095
+      },
+      {
+        "id": "78",
+        "name": "Hertfordshire",
+        "latitude_mean": 51.77481920155452,
+        "latitude_std": 0.09907115716951873,
+        "longitude_mean": -0.265997776113689,
+        "longitude_std": 0.17426797424328475,
+        "probability": 0.21658404828333483
+      },
+      {
+        "id": "186",
+        "name": "Bedford",
+        "latitude_mean": 52.13539797349792,
+        "latitude_std": 0.027832636998563177,
+        "longitude_mean": -0.44628954781893004,
+        "longitude_std": 0.05710131639481996,
+        "probability": 0.01526389899444616
+      },
+      {
+        "id": "208",
+        "name": "Bedfordshire",
+        "latitude_mean": 52.04431681829788,
+        "latitude_std": 0.09951323260974207,
+        "longitude_mean": -0.4535260273758865,
+        "longitude_std": 0.11152472291277075,
+        "probability": 0.044284151403640094
+      },
+      {
+        "id": "129",
+        "name": "Peterborough",
+        "latitude_mean": 52.57514115137116,
+        "latitude_std": 0.03019698315482373,
+        "longitude_mean": -0.2696160864958449,
+        "longitude_std": 0.06723005397654701,
+        "probability": 0.04535199618925979
+      },
+      {
+        "id": "127",
+        "name": "Southend-on-Sea",
+        "latitude_mean": 51.55306735630706,
+        "latitude_std": 0.008802311038996072,
+        "longitude_mean": 0.6967264061825723,
+        "longitude_std": 0.03301459634452362,
+        "probability": 0.01513827019613796
+      },
+      {
+        "id": "128",
+        "name": "Thurrock",
+        "latitude_mean": 51.498214105523665,
+        "latitude_std": 0.016732327577711523,
+        "longitude_mean": 0.3352830033445944,
+        "longitude_std": 0.060321636935114366,
+        "probability": 0.03718612429922686
+      },
+      {
+        "id": "126",
+        "name": "Suffolk",
+        "latitude_mean": 52.176582605525624,
+        "latitude_std": 0.14854432191265288,
+        "longitude_mean": 1.0748158272553083,
+        "longitude_std": 0.3470491819958193,
+        "probability": 0.12129460476656599
+      },
+      {
+        "id": "154",
+        "name": "Norfolk",
+        "latitude_mean": 52.655587484159106,
+        "latitude_std": 0.12176327343655417,
+        "longitude_mean": 1.0532641130409086,
+        "longitude_std": 0.415554275478757,
+        "probability": 0.13819167813901873
+      },
+      {
+        "id": "120",
+        "name": "Luton",
+        "latitude_mean": 51.887000976320316,
+        "latitude_std": 0.012357058457322325,
+        "longitude_mean": -0.4195233707792205,
+        "longitude_std": 0.023629269242210923,
+        "probability": 0.014510126204596968
+      }
+    ],
+    "Yorkshire and The Humber": [
+      {
+        "id": "131",
+        "name": "North East Lincolnshire",
+        "latitude_mean": 53.559670577959196,
+        "latitude_std": 0.027604772198687965,
+        "longitude_mean": -0.11202968877551013,
+        "longitude_std": 0.05700301345865716,
+        "probability": 0.02819941011438026
+      },
+      {
+        "id": "63",
+        "name": "Leeds",
+        "latitude_mean": 53.80387902747816,
+        "latitude_std": 0.05318313000771188,
+        "longitude_mean": -1.5246176932292974,
+        "longitude_std": 0.09526770765226317,
+        "probability": 0.172865261491979
+      },
+      {
+        "id": "159",
+        "name": "Sheffield",
+        "latitude_mean": 53.38790739232164,
+        "latitude_std": 0.033667172924746594,
+        "longitude_mean": -1.4647081017487436,
+        "longitude_std": 0.048319260027746135,
+        "probability": 0.0715775843464499
+      },
+      {
+        "id": "195",
+        "name": "Bradford",
+        "latitude_mean": 53.81634855398681,
+        "latitude_std": 0.048770677839971556,
+        "longitude_mean": -1.7897089887087654,
+        "longitude_std": 0.06748529839360645,
+        "probability": 0.07632544421264657
+      },
+      {
+        "id": "79",
+        "name": "Doncaster",
+        "latitude_mean": 53.525172858331416,
+        "latitude_std": 0.048186650064825955,
+        "longitude_mean": -1.1153642147161067,
+        "longitude_std": 0.08514317376969684,
+        "probability": 0.06208186461405654
+      },
+      {
+        "id": "202",
+        "name": "York",
+        "latitude_mean": 53.956022407484774,
+        "latitude_std": 0.02468018690661595,
+        "longitude_mean": -1.0743862631643006,
+        "longitude_std": 0.046872459576522994,
+        "probability": 0.03546507445507517
+      },
+      {
+        "id": "88",
+        "name": "Wakefield",
+        "latitude_mean": 53.68089458688312,
+        "latitude_std": 0.02935269994584331,
+        "longitude_mean": -1.4162488693181818,
+        "longitude_std": 0.1078217105625715,
+        "probability": 0.06647003812675348
+      },
+      {
+        "id": "169",
+        "name": "Kingston upon Hull, City of",
+        "latitude_mean": 53.74823938888271,
+        "latitude_std": 0.015838170410252327,
+        "longitude_mean": -0.34123383379888267,
+        "longitude_std": 0.03777501604036451,
+        "probability": 0.02575354291058197
+      },
+      {
+        "id": "100",
+        "name": "North Yorkshire",
+        "latitude_mean": 54.11653924313142,
+        "latitude_std": 0.22103779148939742,
+        "longitude_mean": -1.3179875232929568,
+        "longitude_std": 0.43095100527781016,
+        "probability": 0.16034817639018775
+      },
+      {
+        "id": "197",
+        "name": "Kirklees",
+        "latitude_mean": 53.67041426792532,
+        "latitude_std": 0.05378412872848286,
+        "longitude_mean": -1.7363621158713696,
+        "longitude_std": 0.07405045411170268,
+        "probability": 0.06934752895475145
+      },
+      {
+        "id": "194",
+        "name": "Barnsley",
+        "latitude_mean": 53.53294689748486,
+        "latitude_std": 0.03360616259660883,
+        "longitude_mean": -1.4802332522121218,
+        "longitude_std": 0.07547549093843918,
+        "probability": 0.04747859866196676
+      },
+      {
+        "id": "87",
+        "name": "Calderdale",
+        "latitude_mean": 53.706942308713685,
+        "latitude_std": 0.029019128745887905,
+        "longitude_mean": -1.8909896179253114,
+        "longitude_std": 0.10109785189946686,
+        "probability": 0.034673764477375725
+      },
+      {
+        "id": "62",
+        "name": "Rotherham",
+        "latitude_mean": 53.40734154232805,
+        "latitude_std": 0.03965198733023182,
+        "longitude_mean": -1.315145308756613,
+        "longitude_std": 0.05099293643826209,
+        "probability": 0.05438457664916193
+      },
+      {
+        "id": "89",
+        "name": "East Riding of Yorkshire",
+        "latitude_mean": 53.84093407096458,
+        "latitude_std": 0.11895126702211166,
+        "longitude_mean": -0.5589790644322342,
+        "longitude_std": 0.24560132271248913,
+        "probability": 0.05891662470325876
+      },
+      {
+        "id": "130",
+        "name": "North Lincolnshire",
+        "latitude_mean": 53.58917236924306,
+        "latitude_std": 0.05094216859194448,
+        "longitude_mean": -0.5699290642231079,
+        "longitude_std": 0.1549294670446121,
+        "probability": 0.03611250989137472
+      }
+    ],
+    "London": [
+      {
+        "id": "174",
+        "name": "City of London",
+        "latitude_mean": 51.512806871571904,
+        "latitude_std": 0.003377774349650732,
+        "longitude_mean": -0.09556396541806017,
+        "longitude_std": 0.010114550792118976,
+        "probability": 0.018112521769857896
+      },
+      {
+        "id": "125",
+        "name": "Waltham Forest",
+        "latitude_mean": 51.59025459268655,
+        "latitude_std": 0.023091257999415447,
+        "longitude_mean": -0.008975674129353236,
+        "longitude_std": 0.017695728443357713,
+        "probability": 0.02435195234609657
+      },
+      {
+        "id": "147",
+        "name": "Ealing",
+        "latitude_mean": 51.52526598751921,
+        "latitude_std": 0.014471203531465145,
+        "longitude_mean": -0.32222887213461565,
+        "longitude_std": 0.04479873286497963,
+        "probability": 0.03150003786062243
+      },
+      {
+        "id": "57",
+        "name": "Barnet",
+        "latitude_mean": 51.60461546991011,
+        "latitude_std": 0.025082924527387404,
+        "longitude_mean": -0.21875447514485505,
+        "longitude_std": 0.03592632706529502,
+        "probability": 0.060637572881698173
+      },
+      {
+        "id": "122",
+        "name": "Hackney",
+        "latitude_mean": 51.546655570631586,
+        "latitude_std": 0.015296238322022914,
+        "longitude_mean": -0.06518607197368426,
+        "longitude_std": 0.021388165442035895,
+        "probability": 0.023019258436608698
+      },
+      {
+        "id": "110",
+        "name": "Kensington and Chelsea",
+        "latitude_mean": 51.49373451970501,
+        "latitude_std": 0.009390243947941019,
+        "longitude_mean": -0.18622234073746305,
+        "longitude_std": 0.01581365924776794,
+        "probability": 0.02053560160529039
+      },
+      {
+        "id": "107",
+        "name": "Lambeth",
+        "latitude_mean": 51.46898903425937,
+        "latitude_std": 0.024766196579722174,
+        "longitude_mean": -0.11850145459131453,
+        "longitude_std": 0.011042729097534383,
+        "probability": 0.034523839571922565
+      },
+      {
+        "id": "165",
+        "name": "Haringey",
+        "latitude_mean": 51.590548294605284,
+        "latitude_std": 0.008995919632785005,
+        "longitude_mean": -0.09940440059210527,
+        "longitude_std": 0.02744597166780298,
+        "probability": 0.018415406749286958
+      },
+      {
+        "id": "167",
+        "name": "Newham",
+        "latitude_mean": 51.528353912088626,
+        "latitude_std": 0.015517289635677159,
+        "longitude_mean": 0.03824734966244728,
+        "longitude_std": 0.025866895240614706,
+        "probability": 0.02871349604987506
+      },
+      {
+        "id": "118",
+        "name": "Brent",
+        "latitude_mean": 51.556126358281915,
+        "latitude_std": 0.013515428938787846,
+        "longitude_mean": -0.2704788824229074,
+        "longitude_std": 0.031778952653448884,
+        "probability": 0.027501956132158813
+      },
+      {
+        "id": "146",
+        "name": "Hammersmith and Fulham",
+        "latitude_mean": 51.49566352643962,
+        "latitude_std": 0.0136891303940989,
+        "longitude_mean": -0.2230413527244582,
+        "longitude_std": 0.014911531577649004,
+        "probability": 0.019566369671117394
+      },
+      {
+        "id": "185",
+        "name": "Harrow",
+        "latitude_mean": 51.596131888888884,
+        "latitude_std": 0.01877312945690014,
+        "longitude_mean": -0.337733796984127,
+        "longitude_std": 0.02979366372921874,
+        "probability": 0.015265402963224716
+      },
+      {
+        "id": "121",
+        "name": "Enfield",
+        "latitude_mean": 51.64144440141942,
+        "latitude_std": 0.025879535752216253,
+        "longitude_mean": -0.08056623422647527,
+        "longitude_std": 0.03932094995494331,
+        "probability": 0.03798177642040435
+      },
+      {
+        "id": "145",
+        "name": "Camden",
+        "latitude_mean": 51.531573125239966,
+        "latitude_std": 0.011418094433039627,
+        "longitude_mean": -0.13599771593999999,
+        "longitude_std": 0.01789919341617397,
+        "probability": 0.03028849794290618
+      },
+      {
+        "id": "106",
+        "name": "Bexley",
+        "latitude_mean": 51.44869253619932,
+        "latitude_std": 0.019894684188136124,
+        "longitude_mean": 0.13174361182432437,
+        "longitude_std": 0.02909489716733652,
+        "probability": 0.03586158156440092
+      },
+      {
+        "id": "168",
+        "name": "Barking and Dagenham",
+        "latitude_mean": 51.54328595467155,
+        "latitude_std": 0.016546724743623075,
+        "longitude_mean": 0.12187858372262778,
+        "longitude_std": 0.030156666880795987,
+        "probability": 0.016598096872712586
+      },
+      {
+        "id": "109",
+        "name": "Westminster",
+        "latitude_mean": 51.510570385500024,
+        "latitude_std": 0.011407100324541562,
+        "longitude_mean": -0.14795386407000002,
+        "longitude_std": 0.021151280441065855,
+        "probability": 0.06057699588581236
+      },
+      {
+        "id": "134",
+        "name": "Croydon",
+        "latitude_mean": 51.37122844556717,
+        "latitude_std": 0.024263943526719622,
+        "longitude_mean": -0.09465902474694589,
+        "longitude_std": 0.02587528359177434,
+        "probability": 0.03471061864257048
+      },
+      {
+        "id": "177",
+        "name": "Sutton",
+        "latitude_mean": 51.364108917058836,
+        "latitude_std": 0.010656231660685158,
+        "longitude_mean": -0.189896935026738,
+        "longitude_std": 0.03241401276100931,
+        "probability": 0.011327898230646912
+      },
+      {
+        "id": "175",
+        "name": "Richmond upon Thames",
+        "latitude_mean": 51.44518628269704,
+        "latitude_std": 0.021987016687179246,
+        "longitude_mean": -0.3220176963900416,
+        "longitude_std": 0.03260997658528437,
+        "probability": 0.02919811201696156
+      },
+      {
+        "id": "93",
+        "name": "Tower Hamlets",
+        "latitude_mean": 51.51582839977902,
+        "latitude_std": 0.009638147273167471,
+        "longitude_mean": -0.03624318383057092,
+        "longitude_std": 0.025273173046601087,
+        "probability": 0.03289330876599611
+      },
+      {
+        "id": "111",
+        "name": "Hounslow",
+        "latitude_mean": 51.47547705244816,
+        "latitude_std": 0.019050196819270712,
+        "longitude_mean": -0.3497363590456431,
+        "longitude_std": 0.05433051487480398,
+        "probability": 0.04379716802544234
+      },
+      {
+        "id": "103",
+        "name": "Southwark",
+        "latitude_mean": 51.48754573288252,
+        "latitude_std": 0.019679586057146876,
+        "longitude_mean": -0.082557460273224,
+        "longitude_std": 0.01702554306686555,
+        "probability": 0.044342360988414646
+      },
+      {
+        "id": "176",
+        "name": "Bromley",
+        "latitude_mean": 51.38731931304165,
+        "latitude_std": 0.025833390081752266,
+        "longitude_mean": 0.0343735211875,
+        "longitude_std": 0.05954569143379352,
+        "probability": 0.029076958025189933
+      },
+      {
+        "id": "96",
+        "name": "Islington",
+        "latitude_mean": 51.54186488196603,
+        "latitude_std": 0.014930934449137744,
+        "longitude_mean": -0.10940469458737861,
+        "longitude_std": 0.013227272046126474,
+        "probability": 0.024957722304954695
+      },
+      {
+        "id": "105",
+        "name": "Greenwich",
+        "latitude_mean": 51.475277769894376,
+        "latitude_std": 0.01625237753700643,
+        "longitude_mean": 0.039225280123239434,
+        "longitude_std": 0.03268142427605705,
+        "probability": 0.03440773366314142
+      },
+      {
+        "id": "201",
+        "name": "Havering",
+        "latitude_mean": 51.560740989911125,
+        "latitude_std": 0.030571737681972265,
+        "longitude_mean": 0.20831922835555555,
+        "longitude_std": 0.03810331741196248,
+        "probability": 0.027259648148615562
+      },
+      {
+        "id": "104",
+        "name": "Lewisham",
+        "latitude_mean": 51.450475662139226,
+        "latitude_std": 0.019556824049318345,
+        "longitude_mean": -0.025173146082474233,
+        "longitude_std": 0.021633803673307618,
+        "probability": 0.023503874403695196
+      },
+      {
+        "id": "178",
+        "name": "Kingston upon Thames",
+        "latitude_mean": 51.395832859027806,
+        "latitude_std": 0.02250959106677367,
+        "longitude_mean": -0.282899009623016,
+        "longitude_std": 0.02153402567681612,
+        "probability": 0.030530805926449432
+      },
+      {
+        "id": "108",
+        "name": "Wandsworth",
+        "latitude_mean": 51.458285168493866,
+        "latitude_std": 0.013227455125805743,
+        "longitude_mean": -0.18564997798598942,
+        "longitude_std": 0.029505741335919156,
+        "probability": 0.03458946465079886
+      },
+      {
+        "id": "204",
+        "name": "Merton",
+        "latitude_mean": 51.40675375149171,
+        "latitude_std": 0.009997114255886593,
+        "longitude_mean": -0.1938292623756906,
+        "longitude_std": 0.028847704791284526,
+        "probability": 0.021928872510664076
+      },
+      {
+        "id": "66",
+        "name": "Hillingdon",
+        "latitude_mean": 51.51791219005879,
+        "latitude_std": 0.03782978216118414,
+        "longitude_mean": -0.4442716642352941,
+        "longitude_std": 0.03216790942896583,
+        "probability": 0.041192357202352405
+      },
+      {
+        "id": "124",
+        "name": "Redbridge",
+        "latitude_mean": 51.58233327970481,
+        "latitude_std": 0.01719623093287919,
+        "longitude_mean": 0.050174865276752766,
+        "longitude_std": 0.029645753778531014,
+        "probability": 0.0328327317701103
+      }
+    ],
+    "East Midlands": [
+      {
+        "id": "188",
+        "name": "Nottingham",
+        "latitude_mean": 52.95531427975243,
+        "latitude_std": 0.019631046224610316,
+        "longitude_mean": -1.1671178062448413,
+        "longitude_std": 0.025798307996925746,
+        "probability": 0.0552687095731943
+      },
+      {
+        "id": "60",
+        "name": "Leicestershire",
+        "latitude_mean": 52.668449632546036,
+        "latitude_std": 0.11387266412408041,
+        "longitude_mean": -1.2024218518043142,
+        "longitude_std": 0.15953610556666212,
+        "probability": 0.14451969312055346
+      },
+      {
+        "id": "153",
+        "name": "Leicester",
+        "latitude_mean": 52.63875951886522,
+        "latitude_std": 0.022212613179090623,
+        "longitude_mean": -1.1350738720744686,
+        "longitude_std": 0.026193587746562812,
+        "probability": 0.04287696313518787
+      },
+      {
+        "id": "59",
+        "name": "Northamptonshire",
+        "latitude_mean": 52.30301333112817,
+        "latitude_std": 0.11337897178143182,
+        "longitude_mean": -0.8432488120273378,
+        "longitude_std": 0.1934313840758128,
+        "probability": 0.20115048116213802
+      },
+      {
+        "id": "61",
+        "name": "Derbyshire",
+        "latitude_mean": 53.09187371267678,
+        "latitude_std": 0.1794787035003079,
+        "longitude_mean": -1.5271934460604832,
+        "longitude_std": 0.20092618770452336,
+        "probability": 0.18602824253866085
+      },
+      {
+        "id": "99",
+        "name": "Lincolnshire",
+        "latitude_mean": 53.08567106690946,
+        "latitude_std": 0.2338062820139562,
+        "longitude_mean": -0.32632597710718003,
+        "longitude_std": 0.2936831317305093,
+        "probability": 0.14611617579048067
+      },
+      {
+        "id": "2",
+        "name": "Nottinghamshire",
+        "latitude_mean": 53.107132546181134,
+        "latitude_std": 0.1476355993179263,
+        "longitude_mean": -1.0754487006442577,
+        "longitude_std": 0.15446898510728727,
+        "probability": 0.16284123233257522
+      },
+      {
+        "id": "98",
+        "name": "Rutland",
+        "latitude_mean": 52.65383869163938,
+        "latitude_std": 0.04583652687273765,
+        "longitude_mean": -0.6165469763387977,
+        "longitude_std": 0.09572825615866677,
+        "probability": 0.013912206123651384
+      },
+      {
+        "id": "119",
+        "name": "Derby",
+        "latitude_mean": 52.91655105019292,
+        "latitude_std": 0.01466884049686545,
+        "longitude_mean": -1.4683459659967841,
+        "longitude_std": 0.035186238696235696,
+        "probability": 0.047286296223558254
+      }
+    ],
+    "Scotland": [
+      {
+        "id": "4",
+        "name": "North Lanarkshire",
+        "latitude_mean": 55.85425319967347,
+        "latitude_std": 0.05493666336358725,
+        "longitude_mean": -3.9973373894897968,
+        "longitude_std": 0.0759554386661044,
+        "probability": 0.04608294930875576
+      },
+      {
+        "id": "32",
+        "name": "Fife",
+        "latitude_mean": 56.17182416555882,
+        "latitude_std": 0.11272145965247925,
+        "longitude_mean": -3.2013371859705884,
+        "longitude_std": 0.24333950342330057,
+        "probability": 0.06395184802031412
+      },
+      {
+        "id": "31",
+        "name": "Perth & Kinross",
+        "latitude_mean": 56.42610611005408,
+        "latitude_std": 0.1609574250569282,
+        "longitude_mean": -3.520317982810811,
+        "longitude_std": 0.21886462110847107,
+        "probability": 0.0521959936048152
+      },
+      {
+        "id": "45",
+        "name": "Aberdeenshire",
+        "latitude_mean": 57.30981545419078,
+        "latitude_std": 0.24850680282203685,
+        "longitude_mean": -2.3663419713969334,
+        "longitude_std": 0.3439719991549974,
+        "probability": 0.05520549233518292
+      },
+      {
+        "id": "43",
+        "name": "West Dunbartonshire",
+        "latitude_mean": 55.94017502827161,
+        "latitude_std": 0.025977741098393285,
+        "longitude_mean": -4.499779532098765,
+        "longitude_std": 0.06494207224487204,
+        "probability": 0.015235587322486598
+      },
+      {
+        "id": "37",
+        "name": "South Lanarkshire",
+        "latitude_mean": 55.71253989893912,
+        "latitude_std": 0.09340913107620363,
+        "longitude_mean": -3.9427299388212176,
+        "longitude_std": 0.1937307151794504,
+        "probability": 0.0478698391799116
+      },
+      {
+        "id": "46",
+        "name": "Moray",
+        "latitude_mean": 57.57115395083831,
+        "latitude_std": 0.112988216040615,
+        "longitude_mean": -3.2105863292215573,
+        "longitude_std": 0.22040709726798477,
+        "probability": 0.015705821499106556
+      },
+      {
+        "id": "35",
+        "name": "Highland",
+        "latitude_mean": 57.553060804558115,
+        "latitude_std": 0.4823776859371068,
+        "longitude_mean": -4.566913203941858,
+        "longitude_std": 0.8214314637583016,
+        "probability": 0.08088027837863256
+      },
+      {
+        "id": "52",
+        "name": "Angus",
+        "latitude_mean": 56.6295982303831,
+        "latitude_std": 0.0806514092610514,
+        "longitude_mean": -2.770693584559388,
+        "longitude_std": 0.17476389453727778,
+        "probability": 0.024546224019561743
+      },
+      {
+        "id": "41",
+        "name": "North Ayrshire",
+        "latitude_mean": 55.66351802542553,
+        "latitude_std": 0.064985310188723,
+        "longitude_mean": -4.7507122461702105,
+        "longitude_std": 0.15220654941250256,
+        "probability": 0.017680805040910373
+      },
+      {
+        "id": "54",
+        "name": "Orkney Islands",
+        "latitude_mean": 58.99836689082475,
+        "latitude_std": 0.0681643951624347,
+        "longitude_mean": -3.088851930824744,
+        "longitude_std": 0.15538956661032743,
+        "probability": 0.009122543026427161
+      },
+      {
+        "id": "42",
+        "name": "Stirling",
+        "latitude_mean": 56.14975386595,
+        "latitude_std": 0.10335774098139046,
+        "longitude_mean": -4.084926308399999,
+        "longitude_std": 0.21832373462434979,
+        "probability": 0.037618734129596536
+      },
+      {
+        "id": "29",
+        "name": "City of Edinburgh",
+        "latitude_mean": 55.93857626293655,
+        "latitude_std": 0.023288173953227586,
+        "longitude_mean": -3.241078450476189,
+        "longitude_std": 0.09775692330542105,
+        "probability": 0.04739960500329164
+      },
+      {
+        "id": "44",
+        "name": "Argyll & Bute",
+        "latitude_mean": 56.1042320616422,
+        "latitude_std": 0.24757573798631285,
+        "longitude_mean": -5.192607709032257,
+        "longitude_std": 0.4831006301169458,
+        "probability": 0.03206997084548105
+      },
+      {
+        "id": "27",
+        "name": "West Lothian",
+        "latitude_mean": 55.907164612325595,
+        "latitude_std": 0.0458899944859821,
+        "longitude_mean": -3.5751341602906987,
+        "longitude_std": 0.0846891937325519,
+        "probability": 0.03235211135145302
+      },
+      {
+        "id": "47",
+        "name": "Dundee City",
+        "latitude_mean": 56.4732345442253,
+        "latitude_std": 0.010671937992460086,
+        "longitude_mean": -2.9630345514084513,
+        "longitude_std": 0.04642717102097633,
+        "probability": 0.01335465061600677
+      },
+      {
+        "id": "53",
+        "name": "Comhairle nan Eilean Siar",
+        "latitude_mean": 57.91214944040982,
+        "latitude_std": 0.4038936021110456,
+        "longitude_mean": -6.800673295655741,
+        "longitude_std": 0.417272012943229,
+        "probability": 0.011473713909526945
+      },
+      {
+        "id": "55",
+        "name": "Shetland Islands",
+        "latitude_mean": 60.2564847005785,
+        "latitude_std": 0.17134045885798962,
+        "longitude_mean": -1.2552134897520661,
+        "longitude_std": 0.13166062885405894,
+        "probability": 0.011379667074202952
+      },
+      {
+        "id": "34",
+        "name": "East Lothian",
+        "latitude_mean": 55.96364936816257,
+        "latitude_std": 0.032272241678470426,
+        "longitude_mean": -2.841596574876325,
+        "longitude_std": 0.16877594271410307,
+        "probability": 0.02661525439668955
+      },
+      {
+        "id": "30",
+        "name": "Falkirk",
+        "latitude_mean": 56.01246698014747,
+        "latitude_std": 0.021010052885122543,
+        "longitude_mean": -3.7756751376696185,
+        "longitude_std": 0.10208644686923624,
+        "probability": 0.03188187717483307
+      },
+      {
+        "id": "206",
+        "name": "East Renfrewshire",
+        "latitude_mean": 55.77332871271846,
+        "latitude_std": 0.01981732827060403,
+        "longitude_mean": -4.348003685145629,
+        "longitude_std": 0.04283449391177355,
+        "probability": 0.009686824038371109
+      },
+      {
+        "id": "39",
+        "name": "East Ayrshire",
+        "latitude_mean": 55.58937952693879,
+        "latitude_std": 0.09362289726696191,
+        "longitude_mean": -4.424540491510206,
+        "longitude_std": 0.0937279688770545,
+        "probability": 0.02304147465437788
+      },
+      {
+        "id": "49",
+        "name": "East Dunbartonshire",
+        "latitude_mean": 55.938742123921564,
+        "latitude_std": 0.020319706023741536,
+        "longitude_mean": -4.264864703725489,
+        "longitude_std": 0.074932994601961,
+        "probability": 0.009592777203047118
+      },
+      {
+        "id": "33",
+        "name": "Scottish Borders",
+        "latitude_mean": 55.6364441074674,
+        "latitude_std": 0.13212027899843262,
+        "longitude_mean": -2.6912931713315933,
+        "longitude_std": 0.32747346298846697,
+        "probability": 0.03601993792908868
+      },
+      {
+        "id": "48",
+        "name": "Inverclyde",
+        "latitude_mean": 55.93602797299998,
+        "latitude_std": 0.015203398291925158,
+        "longitude_mean": -4.7553015802,
+        "longitude_std": 0.08191363195748728,
+        "probability": 0.009404683532399134
+      },
+      {
+        "id": "3",
+        "name": "Glasgow City",
+        "latitude_mean": 55.85835062116896,
+        "latitude_std": 0.01805783590486913,
+        "longitude_mean": -4.253970343290978,
+        "longitude_std": 0.06232510229771151,
+        "probability": 0.07401485939998119
+      },
+      {
+        "id": "38",
+        "name": "Dumfries & Galloway",
+        "latitude_mean": 55.024219039395895,
+        "latitude_std": 0.14001775673840264,
+        "longitude_mean": -3.928048742496026,
+        "longitude_std": 0.5763140675096069,
+        "probability": 0.05915545941879056
+      },
+      {
+        "id": "40",
+        "name": "South Ayrshire",
+        "latitude_mean": 55.424473916861906,
+        "latitude_std": 0.13489326668074408,
+        "longitude_mean": -4.664691417740585,
+        "longitude_std": 0.11210703490837683,
+        "probability": 0.022477193642433932
+      },
+      {
+        "id": "36",
+        "name": "Midlothian",
+        "latitude_mean": 55.870209111233486,
+        "latitude_std": 0.031274536598824405,
+        "longitude_mean": -3.1031341631718052,
+        "longitude_std": 0.09361291952027237,
+        "probability": 0.021348631618546037
+      },
+      {
+        "id": "28",
+        "name": "Renfrewshire",
+        "latitude_mean": 55.86596974413788,
+        "latitude_std": 0.029452533168654163,
+        "longitude_mean": -4.4457271929153634,
+        "longitude_std": 0.06512479757785057,
+        "probability": 0.03000094046835324
+      },
+      {
+        "id": "51",
+        "name": "Aberdeen City",
+        "latitude_mean": 57.15255901924186,
+        "latitude_std": 0.02435421134483954,
+        "longitude_mean": -2.1420914893501797,
+        "longitude_std": 0.04653819866066237,
+        "probability": 0.026050973384745605
+      },
+      {
+        "id": "50",
+        "name": "Clackmannanshire",
+        "latitude_mean": 56.14535070371431,
+        "latitude_std": 0.02738638358435948,
+        "longitude_mean": -3.7375222680000006,
+        "longitude_std": 0.08195130939567455,
+        "probability": 0.0065832784726793945
+      }
+    ],
+    "Wales": [
+      {
+        "id": "9",
+        "name": "Isle of Anglesey",
+        "latitude_mean": 53.2569376849714,
+        "latitude_std": 0.04352455151543062,
+        "longitude_mean": -4.344790802800001,
+        "longitude_std": 0.15085157050316592,
+        "probability": 0.0349196847251322
+      },
+      {
+        "id": "21",
+        "name": "Merthyr Tydfil",
+        "latitude_mean": 51.735071628440366,
+        "latitude_std": 0.031968364637598425,
+        "longitude_mean": -3.376536359128441,
+        "longitude_std": 0.029907117659573414,
+        "probability": 0.021749975057368053
+      },
+      {
+        "id": "10",
+        "name": "Gwynedd",
+        "latitude_mean": 52.98139999461791,
+        "latitude_std": 0.1839405495955791,
+        "longitude_mean": -4.102975477528455,
+        "longitude_std": 0.19881928787733866,
+        "probability": 0.06135887458844657
+      },
+      {
+        "id": "16",
+        "name": "Pembrokeshire",
+        "latitude_mean": 51.79999048526202,
+        "latitude_std": 0.10328986550500839,
+        "longitude_mean": -4.901069384800837,
+        "longitude_std": 0.14157670932423747,
+        "probability": 0.047590541753965876
+      },
+      {
+        "id": "23",
+        "name": "Ceredigion",
+        "latitude_mean": 52.253871719857635,
+        "latitude_std": 0.14450165518744948,
+        "longitude_mean": -4.194020800996442,
+        "longitude_std": 0.21272735790793412,
+        "probability": 0.02803551830789185
+      },
+      {
+        "id": "7",
+        "name": "Bridgend",
+        "latitude_mean": 51.52814744985916,
+        "latitude_std": 0.030444953063457476,
+        "longitude_mean": -3.6007108615962435,
+        "longitude_std": 0.06091074600675674,
+        "probability": 0.04250224483687519
+      },
+      {
+        "id": "24",
+        "name": "Blaenau Gwent",
+        "latitude_mean": 51.77191421860464,
+        "latitude_std": 0.033819014836033,
+        "longitude_mean": -3.19159555337209,
+        "longitude_std": 0.03805077441268512,
+        "probability": 0.017160530779207823
+      },
+      {
+        "id": "18",
+        "name": "The Vale of Glamorgan",
+        "latitude_mean": 51.44927099147287,
+        "latitude_std": 0.03247523884180045,
+        "longitude_mean": -3.319742677364342,
+        "longitude_std": 0.09156832150304847,
+        "probability": 0.025740796168811732
+      },
+      {
+        "id": "17",
+        "name": "Neath Port Talbot",
+        "latitude_mean": 51.65047252717047,
+        "latitude_std": 0.05695747070954778,
+        "longitude_mean": -3.79456922205624,
+        "longitude_std": 0.0621051530369128,
+        "probability": 0.05676943031028634
+      },
+      {
+        "id": "14",
+        "name": "Powys",
+        "latitude_mean": 52.30402336755185,
+        "latitude_std": 0.29264161514782483,
+        "longitude_mean": -3.3446859532365147,
+        "longitude_std": 0.1911897112968389,
+        "probability": 0.0721340915893445
+      },
+      {
+        "id": "6",
+        "name": "Newport",
+        "latitude_mean": 51.58125570629958,
+        "latitude_std": 0.022531151303804463,
+        "longitude_mean": -3.0028590215859015,
+        "longitude_std": 0.06433908074249378,
+        "probability": 0.04529581961488576
+      },
+      {
+        "id": "25",
+        "name": "Torfaen",
+        "latitude_mean": 51.67190845013698,
+        "latitude_std": 0.03440636015077779,
+        "longitude_mean": -3.026722305068494,
+        "longitude_std": 0.023065716796325027,
+        "probability": 0.01456649705676943
+      },
+      {
+        "id": "19",
+        "name": "Cardiff",
+        "latitude_mean": 51.49529822557509,
+        "latitude_std": 0.024247093798117694,
+        "longitude_mean": -3.198042822679295,
+        "longitude_std": 0.04838963192079901,
+        "probability": 0.07373042003392198
+      },
+      {
+        "id": "15",
+        "name": "Carmarthenshire",
+        "latitude_mean": 51.83661893050447,
+        "latitude_std": 0.10786461680080456,
+        "longitude_mean": -4.174604443768546,
+        "longitude_std": 0.1763940325272222,
+        "probability": 0.067245335727826
+      },
+      {
+        "id": "12",
+        "name": "Denbighshire",
+        "latitude_mean": 53.185542904145215,
+        "latitude_std": 0.11772301311339235,
+        "longitude_mean": -3.365231344332552,
+        "longitude_std": 0.10359104938993766,
+        "probability": 0.04260201536466128
+      },
+      {
+        "id": "26",
+        "name": "Wrexham",
+        "latitude_mean": 53.03297013899999,
+        "latitude_std": 0.05012844868834752,
+        "longitude_mean": -2.9798270048,
+        "longitude_std": 0.0750456274552392,
+        "probability": 0.03990821111443679
+      },
+      {
+        "id": "22",
+        "name": "Rhondda, Cynon, Taff",
+        "latitude_mean": 51.60798881192658,
+        "latitude_std": 0.06215926235615356,
+        "longitude_mean": -3.37266731525557,
+        "longitude_std": 0.0747308373676219,
+        "probability": 0.07612491270078818
+      },
+      {
+        "id": "13",
+        "name": "Monmouthshire",
+        "latitude_mean": 51.741726318063094,
+        "latitude_std": 0.09277316463118712,
+        "longitude_mean": -2.8438408503153147,
+        "longitude_std": 0.14218391184999662,
+        "probability": 0.044298114337024845
+      },
+      {
+        "id": "205",
+        "name": "Caerphilly",
+        "latitude_mean": 51.64841342592593,
+        "latitude_std": 0.05472180262521467,
+        "longitude_mean": -3.205793995714284,
+        "longitude_std": 0.05132445948580011,
+        "probability": 0.03771325950314277
+      },
+      {
+        "id": "20",
+        "name": "Flintshire",
+        "latitude_mean": 53.201907617868834,
+        "latitude_std": 0.05169068895668218,
+        "longitude_mean": -3.1095282003934415,
+        "longitude_std": 0.09907060709772246,
+        "probability": 0.06086002194951611
+      },
+      {
+        "id": "8",
+        "name": "Swansea",
+        "latitude_mean": 51.65541590948545,
+        "latitude_std": 0.030625745152115493,
+        "longitude_mean": -3.972610403221476,
+        "longitude_std": 0.053075937693605586,
+        "probability": 0.04459742592038312
+      },
+      {
+        "id": "11",
+        "name": "Conwy",
+        "latitude_mean": 53.25122656654866,
+        "latitude_std": 0.0782669839687101,
+        "longitude_mean": -3.73247945022124,
+        "longitude_std": 0.12417715125051028,
+        "probability": 0.04509627855931358
+      }
+    ],
+    "North East": [
+      {
+        "id": "171",
+        "name": "Redcar and Cleveland",
+        "latitude_mean": 54.565725701548395,
+        "latitude_std": 0.02880305013300636,
+        "longitude_mean": -1.0855863357419353,
+        "longitude_std": 0.08518196653761088,
+        "probability": 0.04236130090188576
+      },
+      {
+        "id": "166",
+        "name": "South Tyneside",
+        "latitude_mean": 54.96268013091771,
+        "latitude_std": 0.01682311378418625,
+        "longitude_mean": -1.4582548758860758,
+        "longitude_std": 0.03683596090717743,
+        "probability": 0.04318119704837387
+      },
+      {
+        "id": "170",
+        "name": "Middlesbrough",
+        "latitude_mean": 54.55447727770575,
+        "latitude_std": 0.01849350042472417,
+        "longitude_mean": -1.2440737408478804,
+        "longitude_std": 0.02691632082813516,
+        "probability": 0.05479639245695545
+      },
+      {
+        "id": "132",
+        "name": "Hartlepool",
+        "latitude_mean": 54.67087492726317,
+        "latitude_std": 0.0262330847910811,
+        "longitude_mean": -1.253420245684211,
+        "longitude_std": 0.04770357982097714,
+        "probability": 0.02596337797212353
+      },
+      {
+        "id": "173",
+        "name": "North Tyneside",
+        "latitude_mean": 55.02278588069565,
+        "latitude_std": 0.020660836123540006,
+        "longitude_mean": -1.5157276038260874,
+        "longitude_std": 0.056579342379823955,
+        "probability": 0.07857338070511069
+      },
+      {
+        "id": "164",
+        "name": "Darlington",
+        "latitude_mean": 54.540771144609934,
+        "latitude_std": 0.025981607230972634,
+        "longitude_mean": -1.5595933192907796,
+        "longitude_std": 0.04524741008273679,
+        "probability": 0.03853511888494124
+      },
+      {
+        "id": "101",
+        "name": "Gateshead",
+        "latitude_mean": 54.94439747589079,
+        "latitude_std": 0.02135604414653314,
+        "longitude_mean": -1.621688668448276,
+        "longitude_std": 0.05708450621704812,
+        "probability": 0.09510795299262094
+      },
+      {
+        "id": "102",
+        "name": "Northumberland",
+        "latitude_mean": 55.20343824977446,
+        "latitude_std": 0.2302526149273084,
+        "longitude_mean": -1.7623665190668751,
+        "longitude_std": 0.230981011786939,
+        "probability": 0.1757310740639519
+      },
+      {
+        "id": "172",
+        "name": "Newcastle upon Tyne",
+        "latitude_mean": 54.9906754546202,
+        "latitude_std": 0.01765098131201577,
+        "longitude_mean": -1.6390575585271316,
+        "longitude_std": 0.04331810566407806,
+        "probability": 0.08813883574747199
+      },
+      {
+        "id": "92",
+        "name": "Durham",
+        "latitude_mean": 54.75193081306547,
+        "latitude_std": 0.09238329733051734,
+        "longitude_mean": -1.5935515625819034,
+        "longitude_std": 0.18154975682862423,
+        "probability": 0.17518447663295983
+      },
+      {
+        "id": "163",
+        "name": "Stockton-on-Tees",
+        "latitude_mean": 54.56635986877686,
+        "latitude_std": 0.0367882271181674,
+        "longitude_mean": -1.3107195668099167,
+        "longitude_std": 0.03308907257501591,
+        "probability": 0.08267286143755125
+      },
+      {
+        "id": "94",
+        "name": "Sunderland",
+        "latitude_mean": 54.892056440136955,
+        "latitude_std": 0.02613237664807201,
+        "longitude_mean": -1.4540585334657528,
+        "longitude_std": 0.055394248295836904,
+        "probability": 0.09975403115605357
+      }
+    ]
+  },
+  "road_type_distribution": {
+    "Major": 1.0
+  },
+  "hour_distribution": {
+    "12": 0.0833330372465349,
+    "13": 0.0833330372465349,
+    "16": 0.08333354482390365,
+    "15": 0.08333354482390365,
+    "17": 0.08333354482390365,
+    "9": 0.08333354482390365,
+    "8": 0.0833330372465349,
+    "7": 0.08333049935969115,
+    "10": 0.08333354482390365,
+    "11": 0.08333354482390365,
+    "14": 0.08333354482390365,
+    "18": 0.0833330372465349,
+    "1": 2.0303094749975e-06,
+    "0": 5.07577368749375e-07
+  },
+  "day_of_week_distribution": {
+    "6": 0.208314827908431,
+    "3": 0.20051894710180937,
+    "5": 0.199794634196604,
+    "4": 0.20322331932250604,
+    "2": 0.18809954404324966,
+    "1": 4.872742739994001e-05
+  },
+  "link_length_profiles": {
+    "Major": {
+      "log_mean": 1.2766580585140341,
+      "log_std": 0.7017079445211355,
+      "p05": 0.3,
+      "p95": 11.9
+    }
+  },
+  "vehicle_profiles": {
+    "North West": {
+      "log_mean": 6.625925317171561,
+      "log_std": 0.9379774739973293,
+      "p05": 176.0,
+      "p95": 3898.0
+    },
+    "Wales": {
+      "log_mean": 6.166975717079724,
+      "log_std": 1.047548937200504,
+      "p05": 80.0,
+      "p95": 2495.0
+    },
+    "South East": {
+      "log_mean": 6.731417392024292,
+      "log_std": 0.89272719601982,
+      "p05": 223.0,
+      "p95": 3945.0
+    },
+    "London": {
+      "log_mean": 6.733015016646979,
+      "log_std": 0.962432145531041,
+      "p05": 281.0,
+      "p95": 3302.0
+    },
+    "East of England": {
+      "log_mean": 6.685590900795701,
+      "log_std": 0.8418284118771456,
+      "p05": 213.0,
+      "p95": 3227.0
+    },
+    "South West": {
+      "log_mean": 6.361038672854802,
+      "log_std": 0.8773108479614767,
+      "p05": 136.0,
+      "p95": 2443.0
+    },
+    "Yorkshire and The Humber": {
+      "log_mean": 6.607978457409959,
+      "log_std": 0.8646541890167962,
+      "p05": 190.0,
+      "p95": 3241.0
+    },
+    "East Midlands": {
+      "log_mean": 6.507473235910268,
+      "log_std": 0.8987969242052519,
+      "p05": 157.0,
+      "p95": 2849.0
+    },
+    "West Midlands": {
+      "log_mean": 6.604073528070443,
+      "log_std": 0.8820519982650102,
+      "p05": 174.0,
+      "p95": 3367.0
+    },
+    "Scotland": {
+      "log_mean": 5.8277985158356795,
+      "log_std": 1.244072796697303,
+      "p05": 32.0,
+      "p95": 2074.0
+    },
+    "North East": {
+      "log_mean": 6.585564350067078,
+      "log_std": 0.8947295920234893,
+      "p05": 164.0,
+      "p95": 2885.0
+    }
+  },
+  "density_profiles": {
+    "Major": {
+      "log_mean": 5.769718497472786,
+      "log_std": 1.5184189161742632,
+      "p05": 19.25581395348837,
+      "p95": 3195.0
+    }
+  },
+  "heavy_vehicle_share_profile": {
+    "Major": {
+      "log_mean": 0.06157241246190949,
+      "log_std": 0.05000570508052095,
+      "p05": 0.0064,
+      "p95": 0.17620650953984288
+    }
+  }
+}
