@@ -69,7 +69,7 @@ services:
       - INIT_DAEMON_STEP=setup_spark
       - ENABLE_INIT_DAEMON=false
     ports:
-      - "8080:8080"
+      - "18080:8080"
       - "7077:7077"
     volumes:
       - ./analytics/jobs:/opt/spark-apps

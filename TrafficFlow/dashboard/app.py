@@ -12,7 +12,8 @@ import requests
 import streamlit as st
 from requests import RequestException
 from urllib.parse import quote
-import matplotlib.pyplot as plt
+import altair as alt
+import plotly.express as px
 
 WEBHDFS_URL = os.getenv("WEBHDFS_URL", "http://localhost:9870").rstrip("/")
 HDFS_BASE_PATH = os.getenv("HDFS_BASE_PATH", "/data/gold/synthetic").rstrip("/") or "/"
@@ -45,33 +46,22 @@ VEHICLE_BREAKDOWN_COLUMNS: Sequence[str] = (
     "heavy_goods_vehicle_6_articulated_axles_count",
 )
 
-PASTEL_PALETTE = [
-    "#A1C9F4",
-    "#FFB6C1",
-    "#C7CEEA",
-    "#FFDAC1",
-    "#B5EAD7",
-    "#E2F0CB",
-    "#F6A6FF",
-    "#FFD1DC",
-    "#BFC0F0",
-    "#F5C0C0",
-]
-
 VEHICLE_LABELS = {
-    "pedal_cycle_count": "Pedal cycles",
-    "two_wheeled_motor_vehicle_count": "Motorcycles",
-    "car_and_taxi_count": "Cars & taxis",
-    "bus_and_coach_count": "Buses & coaches",
-    "light_goods_vehicle_count": "Light goods",
-    "all_heavy_goods_vehicle_count": "All HGVs",
-    "heavy_goods_vehicle_2_rigid_axles_count": "HGV 2 rigid axles",
-    "heavy_goods_vehicle_3_rigid_axles_count": "HGV 3 rigid axles",
-    "heavy_goods_vehicle_4_plus_rigid_axles_count": "HGV ≥4 rigid axles",
-    "heavy_goods_vehicle_3_or_4_articulated_axles_count": "HGV 3-4 articulated",
-    "heavy_goods_vehicle_5_articulated_axles_count": "HGV 5 articulated",
-    "heavy_goods_vehicle_6_articulated_axles_count": "HGV 6 articulated",
+    "pedal_cycle_count": "Bicicletas",
+    "two_wheeled_motor_vehicle_count": "Motocicletas",
+    "car_and_taxi_count": "Autos y taxis",
+    "bus_and_coach_count": "Autobuses y autocares",
+    "light_goods_vehicle_count": "Vehículos ligeros de carga",
+    "all_heavy_goods_vehicle_count": "Vehículos pesados totales",
+    "heavy_goods_vehicle_2_rigid_axles_count": "Pesados 2 ejes rígidos",
+    "heavy_goods_vehicle_3_rigid_axles_count": "Pesados 3 ejes rígidos",
+    "heavy_goods_vehicle_4_plus_rigid_axles_count": "Pesados ≥4 ejes rígidos",
+    "heavy_goods_vehicle_3_or_4_articulated_axles_count": "Pesados 3-4 articulados",
+    "heavy_goods_vehicle_5_articulated_axles_count": "Pesados 5 articulados",
+    "heavy_goods_vehicle_6_articulated_axles_count": "Pesados 6 articulados",
 }
+
+alt.data_transformers.disable_max_rows()
 
 
 def _webhdfs_get(path: str, operation: str, timeout: float = 10.0) -> requests.Response:
@@ -270,25 +260,76 @@ def compute_time_series(df: pd.DataFrame) -> pd.Series:
     )
 
 
-def pastel_colors(count: int) -> List[str]:
-    if count <= 0:
-        return []
-    repeats = (count // len(PASTEL_PALETTE)) + 1
-    palette = (PASTEL_PALETTE * repeats)[:count]
-    return palette
-
-
 def render_pie_chart(data: pd.Series, title: str) -> None:
     if data.empty or data.sum() == 0:
-        st.info(f"No data available for {title.lower()}.")
+        st.info(f"No hay datos disponibles para {title.lower()}.")
         return
-    fig, ax = plt.subplots()
-    colors = pastel_colors(len(data))
-    ax.pie(data, labels=data.index, autopct="%1.1f%%", startangle=120, colors=colors)
-    ax.axis("equal")
-    ax.set_title(title)
-    st.pyplot(fig, clear_figure=True)
-    plt.close(fig)
+    pie_df = data.reset_index()
+    pie_df.columns = ["Categoría", "Valor"]
+    fig = px.pie(
+        pie_df,
+        names="Categoría",
+        values="Valor",
+        title=title,
+    )
+    fig.update_traces(hovertemplate="%{label}: %{value:,}")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_line_chart(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    title: str,
+    x_title: str,
+    y_title: str,
+) -> None:
+    if df.empty:
+        st.info(f"No hay datos disponibles para {title.lower()}.")
+        return
+    chart = (
+        alt.Chart(df)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X(x_col, title=x_title, type="temporal"),
+            y=alt.Y(y_col, title=y_title, type="quantitative"),
+            tooltip=[
+                alt.Tooltip(x_col, title=x_title, type="temporal"),
+                alt.Tooltip(y_col, title=y_title, type="quantitative"),
+            ],
+        )
+        .properties(title=title, height=320)
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+
+def render_bar_chart(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    title: str,
+    x_title: str,
+    y_title: str,
+    sort_desc: bool = True,
+) -> None:
+    if df.empty:
+        st.info(f"No hay datos disponibles para {title.lower()}.")
+        return
+    order = alt.SortField(field=y_col, order="descending" if sort_desc else "ascending")
+    chart = (
+        alt.Chart(df)
+        .mark_bar()
+        .encode(
+            x=alt.X(x_col, title=x_title, sort=order),
+            y=alt.Y(y_col, title=y_title, type="quantitative"),
+            tooltip=[
+                alt.Tooltip(x_col, title=x_title),
+                alt.Tooltip(y_col, title=y_title, type="quantitative"),
+            ],
+        )
+        .properties(title=title, height=320)
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 
 def aggregate_vehicle_columns(df: pd.DataFrame, columns: Sequence[str]) -> pd.Series:
@@ -301,21 +342,25 @@ def aggregate_vehicle_columns(df: pd.DataFrame, columns: Sequence[str]) -> pd.Se
 
 
 def main() -> None:
-    st.set_page_config(page_title="TrafficFlow Live Monitor", layout="wide")
-    st.title("TrafficFlow Live Monitor")
-    st.caption(f"Watching HDFS path {HDFS_BASE_PATH}")
+    st.set_page_config(page_title="Monitor de tráfico TrafficFlow", layout="wide")
+    st.title("Monitor de tráfico en vivo")
+    st.caption(f"Monitoreando ruta HDFS {HDFS_BASE_PATH}")
 
     window_minutes = DEFAULT_WINDOW_MINUTES
     refresh_seconds = REFRESH_INTERVAL_SECONDS
     refresh_timestamp = datetime.now(timezone.utc)
     st.caption(
-        f"Window: last {window_minutes} minutes | Auto refresh every {refresh_seconds:.1f} seconds"
+        f"Ventana: últimos {window_minutes} minutos | Autoactualización cada {refresh_seconds:.1f} segundos"
     )
 
     if "processed_files" not in st.session_state:
         st.session_state.processed_files = {}
     if "records" not in st.session_state:
         st.session_state.records = pd.DataFrame()
+    if "increment_history" not in st.session_state:
+        st.session_state.increment_history = pd.DataFrame(
+            columns=["timestamp", "vehicles_new", "vehicles_avg_region"]
+        )
 
     error_message = None
     new_payload: List[Dict[str, object]] = []
@@ -324,6 +369,8 @@ def main() -> None:
     except RuntimeError as exc:
         error_message = str(exc)
 
+    vehicles_added = 0.0
+    avg_per_region = float("nan")
     if new_payload:
         latest_df = normalise_records(new_payload)
         if not latest_df.empty:
@@ -331,6 +378,29 @@ def main() -> None:
             combined.sort_values("event_timestamp", inplace=True)
             combined = prune_history(combined, HISTORY_MINUTES)
             st.session_state.records = combined
+
+            vehicles_added = float(
+                pd.to_numeric(latest_df["total_vehicles"], errors="coerce").fillna(0).sum()
+            )
+            region_count = (
+                latest_df["region_name"].dropna().nunique()
+                if "region_name" in latest_df.columns
+                else 0
+            )
+            if region_count > 0 and vehicles_added > 0:
+                avg_per_region = vehicles_added / region_count
+
+    if vehicles_added > 0:
+        history_row = pd.DataFrame(
+            {
+                "timestamp": [refresh_timestamp],
+                "vehicles_new": [vehicles_added],
+                "vehicles_avg_region": [avg_per_region],
+            }
+        )
+        st.session_state.increment_history = pd.concat(
+            [st.session_state.increment_history, history_row], ignore_index=True
+        ).tail(500)
 
     live_df = st.session_state.records.copy()
     live_df = filter_window(live_df, window_minutes)
@@ -340,54 +410,148 @@ def main() -> None:
 
     if live_df.empty:
         st.warning(
-            "No data available in the selected window. Ensure the producer is running and writing to HDFS."
+            "No hay datos en la ventana seleccionada. Verifica que el productor esté escribiendo en HDFS."
         )
         st.caption(
-            f"Last refresh attempt: {refresh_timestamp.strftime('%Y-%m-%d %H:%M:%S %Z')}"
+            f"Último intento de actualización: {refresh_timestamp.strftime('%Y-%m-%d %H:%M:%S %Z')}"
         )
         time.sleep(refresh_seconds)
         st.rerun()
 
     metrics_row = st.columns(3)
-    metrics_row[0].metric("Records (window)", f"{len(live_df):,}")
-    metrics_row[1].metric("Vehicles (window)", f"{live_df['total_vehicles'].sum():,}")
-    metrics_row[2].metric("Mean vehicles/km", f"{live_df['vehicles_per_km'].mean():.1f}")
+    metrics_row[0].metric("Registros (ventana)", f"{len(live_df):,}")
+    metrics_row[1].metric("Vehículos (ventana)", f"{live_df['total_vehicles'].sum():,}")
+    metrics_row[2].metric("Promedio vehículos/km", f"{live_df['vehicles_per_km'].mean():.1f}")
 
-    series = compute_time_series(live_df)
     region_totals, region_density = compute_region_metrics(live_df)
 
-    chart_row = st.columns((2, 1))
-    chart_row[0].line_chart(series, height=300)
-    chart_row[0].caption("Vehicles per minute (resampled)")
-    chart_row[1].bar_chart(region_totals, height=300)
-    chart_row[1].caption("Vehicles by region (sum)")
+    eventos_df = st.session_state.increment_history.rename(
+        columns={
+            "timestamp": "Marca temporal",
+            "vehicles_new": "Vehículos nuevos",
+        }
+    ).sort_values("Marca temporal")
+    eventos_df = eventos_df[eventos_df["Vehículos nuevos"] > 0]
 
-    secondary_row = st.columns(1)
-    secondary_row[0].bar_chart(region_density, height=300)
-    secondary_row[0].caption("Average vehicles/km by region")
+    avg_region_df = (
+        st.session_state.increment_history[
+            ["timestamp", "vehicles_avg_region"]
+        ]
+        .rename(
+            columns={
+                "timestamp": "Marca temporal",
+                "vehicles_avg_region": "Promedio vehículos por región",
+            }
+        )
+        .dropna(subset=["Promedio vehículos por región"])
+        .sort_values("Marca temporal")
+    )
+    avg_region_df = avg_region_df[avg_region_df["Promedio vehículos por región"] > 0]
+
+    time_cols = st.columns(2)
+    with time_cols[0]:
+        render_line_chart(
+            eventos_df,
+            "Marca temporal",
+            "Vehículos nuevos",
+            "Vehículos nuevos por registro",
+            "Marca temporal",
+            "Vehículos nuevos",
+        )
+    with time_cols[1]:
+        render_line_chart(
+            avg_region_df,
+            "Marca temporal",
+            "Promedio vehículos por región",
+            "Promedio de vehículos por región",
+            "Marca temporal",
+            "Promedio vehículos por región",
+        )
+
+    region_totals_df = (
+        region_totals.reset_index().rename(columns={"region_name": "Región", 0: "Vehículos totales"})
+        if not region_totals.empty
+        else pd.DataFrame(columns=["Región", "Vehículos totales"])
+    )
+    if "total_vehicles" in region_totals_df.columns:
+        region_totals_df = region_totals_df.rename(columns={"total_vehicles": "Vehículos totales"})
+
+    render_bar_chart(
+        region_totals_df,
+        "Región",
+        "Vehículos totales",
+        "Vehículos totales por región",
+        "Región",
+        "Vehículos totales",
+    )
+
+    region_density_df = (
+        region_density.reset_index().rename(columns={"region_name": "Región", 0: "Vehículos por kilómetro"})
+        if not region_density.empty
+        else pd.DataFrame(columns=["Región", "Vehículos por kilómetro"])
+    )
+    if "vehicles_per_km" in region_density_df.columns:
+        region_density_df = region_density_df.rename(
+            columns={"vehicles_per_km": "Vehículos por kilómetro"}
+        )
+
+    render_bar_chart(
+        region_density_df,
+        "Región",
+        "Vehículos por kilómetro",
+        "Promedio de vehículos por kilómetro",
+        "Región",
+        "Vehículos por kilómetro",
+        sort_desc=True,
+    )
 
     pie_row = st.columns(2)
     with pie_row[0]:
-        render_pie_chart(region_totals, "Region share of vehicles")
+        render_pie_chart(region_totals, "Participación de vehículos por región")
     with pie_row[1]:
         vehicle_share = aggregate_vehicle_columns(live_df, VEHICLE_SHARE_COLUMNS).sort_values(
             ascending=False
         )
-        render_pie_chart(vehicle_share, "Vehicle type share")
+        render_pie_chart(vehicle_share, "Distribución por tipo de vehículo")
 
     region_options = sorted(live_df["region_name"].dropna().unique().tolist())
     if region_options:
-        selected_region = st.selectbox("Region focus", region_options)
+        selected_region = st.selectbox("Región a analizar", region_options)
         region_focus_df = live_df[live_df["region_name"] == selected_region]
         region_breakdown = aggregate_vehicle_columns(
             region_focus_df, VEHICLE_BREAKDOWN_COLUMNS
         ).sort_values(ascending=False)
         if region_breakdown.empty or region_breakdown.sum() == 0:
-            st.info("No vehicle breakdown data for the selected region in this window.")
+            st.info("No hay desglose de vehículos para la región seleccionada en esta ventana.")
         else:
-            st.bar_chart(region_breakdown, height=320)
+            region_cols = st.columns(2)
+            breakdown_df = region_breakdown.reset_index()
+            breakdown_df.columns = ["Tipo de vehículo", "Total"]
+            with region_cols[0]:
+                render_bar_chart(
+                    breakdown_df,
+                    "Tipo de vehículo",
+                    "Total",
+                    f"Desglose de vehículos en {selected_region}",
+                    "Tipo de vehículo",
+                    "Total",
+                )
 
-    st.subheader("Latest records")
+            road_counts = (
+                region_focus_df["road_name"].dropna().value_counts().head(10)
+                if "road_name" in region_focus_df.columns
+                else pd.Series(dtype=float)
+            )
+            with region_cols[1]:
+                if road_counts.empty or road_counts.sum() == 0:
+                    st.info("No hay información de calles para la región seleccionada.")
+                else:
+                    render_pie_chart(
+                        road_counts,
+                        f"Calles con mayor concurrencia en {selected_region}",
+                    )
+
+    st.subheader("Registros más recientes")
     table_columns = [
         "event_timestamp",
         "region_name",
@@ -402,10 +566,10 @@ def main() -> None:
     st.dataframe(live_df[table_columns].tail(100), width="stretch")
 
     st.caption(
-        f"Auto refresh every {refresh_seconds:.1f} seconds (fixed). Data retained ~{HISTORY_MINUTES} minutes."
+        f"Autoactualización fija cada {refresh_seconds:.1f} segundos. Datos conservados ~{HISTORY_MINUTES} minutos."
     )
     st.caption(
-        f"Last refresh: {refresh_timestamp.strftime('%Y-%m-%d %H:%M:%S %Z')} | Processed files: {len(st.session_state.processed_files)} | Cached records: {len(st.session_state.records)}"
+        f"Última actualización: {refresh_timestamp.strftime('%Y-%m-%d %H:%M:%S %Z')} | Archivos procesados: {len(st.session_state.processed_files)} | Registros en caché: {len(st.session_state.records)}"
     )
     time.sleep(refresh_seconds)
     st.rerun()
