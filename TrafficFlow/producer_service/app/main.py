@@ -1,4 +1,4 @@
-"""Synthetic traffic data producer container entrypoint."""
+# Punto de entrada del productor sintético de tráfico
 from __future__ import annotations
 
 import argparse
@@ -19,28 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-try:  # pragma: no cover - optional dependency for runtime container
-	from kafka import KafkaProducer  # type: ignore
-except ImportError:  # pragma: no cover - handled gracefully when Kafka is unused
-	KafkaProducer = None  # type: ignore
-
 from .webhdfs_client import WebHDFSClient, WebHDFSException
-
-LOG = logging.getLogger("producer")
-STOP_REQUESTED = False
-KM_TO_MILES = 0.621371
-SINK_CHOICES = {"file", "kafka", "hdfs"}
-SINK_ALIASES = {
-	"both": {"file", "kafka"},
-	"all": SINK_CHOICES,
-}
-
-DEFAULT_NUMERIC_PROFILE = {
-	"log_mean": math.log1p(2500.0),
-	"log_std": 0.6,
-	"p05": 50.0,
-	"p95": 90000.0,
-}
 
 VEHICLE_COLUMNS: Sequence[str] = (
 	"pedal_cycle_count",
@@ -58,6 +37,21 @@ HEAVY_COLUMNS: Sequence[str] = (
 	"heavy_goods_vehicle_5_articulated_axles_count",
 	"heavy_goods_vehicle_6_articulated_axles_count",
 )
+
+LOG = logging.getLogger("producer")
+STOP_REQUESTED = False
+KM_TO_MILES = 0.621371
+SINK_CHOICES = {"file", "hdfs"}
+SINK_ALIASES = {
+	"all": SINK_CHOICES,
+}
+
+DEFAULT_NUMERIC_PROFILE = {
+	"log_mean": math.log1p(2500.0),
+	"log_std": 0.6,
+	"p05": 50.0,
+	"p95": 90000.0,
+}
 
 DEFAULT_PROFILES = {
 	"meta": {
@@ -182,65 +176,89 @@ DEFAULT_PROFILES = {
 }
 
 
+# Contenedor de perfiles probabilísticos cargados desde disco
 @dataclass
 class Profiles:
 	data: Dict[str, object]
 
 	@property
 	def region_distribution(self) -> Dict[str, Dict[str, float]]:
-		return self.data.get("region_distribution", {})  # type: ignore[return-value]
+		value = self.data.get("region_distribution", {})
+		return value if isinstance(value, dict) else {}
 
 	@property
 	def local_authorities(self) -> Dict[str, List[Dict[str, float]]]:
-		return self.data.get("local_authority_distribution", {})  # type: ignore[return-value]
+		value = self.data.get("local_authority_distribution", {})
+		return value if isinstance(value, dict) else {}
 
 	@property
 	def road_type_distribution(self) -> Dict[str, float]:
-		return self.data.get("road_type_distribution", {})  # type: ignore[return-value]
+		value = self.data.get("road_type_distribution", {})
+		return value if isinstance(value, dict) else {}
 
 	@property
 	def travel_direction_distribution(self) -> Dict[str, float]:
-		return self.data.get("travel_direction_distribution", {})  # type: ignore[return-value]
+		value = self.data.get("travel_direction_distribution", {})
+		return value if isinstance(value, dict) else {}
 
 	@property
 	def hour_distribution(self) -> Dict[str, float]:
-		return self.data.get("hour_distribution", {})  # type: ignore[return-value]
+		value = self.data.get("hour_distribution", {})
+		return value if isinstance(value, dict) else {}
 
 	@property
 	def day_of_week_distribution(self) -> Dict[str, float]:
-		return self.data.get("day_of_week_distribution", {})  # type: ignore[return-value]
+		value = self.data.get("day_of_week_distribution", {})
+		return value if isinstance(value, dict) else {}
 
 	@property
 	def link_length_profiles(self) -> Dict[str, Dict[str, float]]:
-		return self.data.get("link_length_profiles", {})  # type: ignore[return-value]
+		value = self.data.get("link_length_profiles", {})
+		return value if isinstance(value, dict) else {}
 
 	@property
 	def density_profiles(self) -> Dict[str, Dict[str, float]]:
-		return self.data.get("density_profiles", {})  # type: ignore[return-value]
+		value = self.data.get("density_profiles", {})
+		return value if isinstance(value, dict) else {}
 
 	@property
 	def heavy_share_profiles(self) -> Dict[str, Dict[str, float]]:
-		return self.data.get("heavy_vehicle_share_profile", {})  # type: ignore[return-value]
+		value = self.data.get("heavy_vehicle_share_profile", {})
+		return value if isinstance(value, dict) else {}
 
 	@property
 	def vehicle_profiles(self) -> Dict[str, Dict[str, float]]:
-		return self.data.get("vehicle_profiles", {})  # type: ignore[return-value]
+		value = self.data.get("vehicle_profiles", {})
+		return value if isinstance(value, dict) else {}
 
 	@property
 	def vehicle_share_profiles(self) -> Dict[str, Dict[str, Dict[str, float]]]:
-		return self.data.get("vehicle_share_profiles", {})  # type: ignore[return-value]
+		value = self.data.get("vehicle_share_profiles", {})
+		return value if isinstance(value, dict) else {}
 
 	@property
 	def heavy_breakdown_profiles(self) -> Dict[str, Dict[str, Dict[str, float]]]:
-		return self.data.get("heavy_breakdown_profiles", {})  # type: ignore[return-value]
+		value = self.data.get("heavy_breakdown_profiles", {})
+		return value if isinstance(value, dict) else {}
 
 
+# Configura argumentos CLI para controlar el productor
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 	parser = argparse.ArgumentParser(description="Synthetic traffic producer")
 	parser.add_argument(
 		"--profile-path",
 		default=os.environ.get("PROFILES_PATH", "/opt/producer/profiles/distributions.json"),
 		help="Path to JSON file with probability distributions",
+	)
+	parser.add_argument(
+		"--profile-override-path",
+		default=os.environ.get("PROFILE_OVERRIDE_PATH"),
+		help="Optional override profile generated at runtime (JSON)",
+	)
+	parser.add_argument(
+		"--profile-status-path",
+		default=os.environ.get("PROFILE_STATUS_PATH"),
+		help="Optional path where the producer writes the resolved profile status (JSON)",
 	)
 	parser.add_argument(
 		"--output-path",
@@ -250,17 +268,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 	parser.add_argument(
 		"--sink",
 		action="append",
-		help="Output sink(s) (file, kafka, hdfs, both, all). Can be repeated or comma separated",
-	)
-	parser.add_argument(
-		"--kafka-bootstrap",
-		default=os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092"),
-		help="Kafka bootstrap servers (comma separated)",
-	)
-	parser.add_argument(
-		"--kafka-topic",
-		default=os.environ.get("KAFKA_TOPIC", "traffic.synthetic"),
-		help="Kafka topic where synthetic records will be published",
+		help="Output sink(s) (file, hdfs, all). Can be repeated or comma separated",
 	)
 	parser.add_argument(
 		"--webhdfs-url",
@@ -356,21 +364,62 @@ def resolve_sink_targets(cli_values: Optional[List[str]], env_value: Optional[st
 	return resolved
 
 
-def load_profiles(path: str) -> Profiles:
+
+def load_profiles(path: str, override_path: Optional[str] = None) -> Tuple[Profiles, str, Optional[Path]]:
 	base = deepcopy(DEFAULT_PROFILES)
-	candidate = Path(path)
-	if candidate.exists():
+	resolved_label = "defaults"
+	resolved_path: Optional[Path] = None
+	candidates = []
+	if override_path:
+		candidates.append(("override", Path(override_path)))
+	candidates.append(("primary", Path(path)))
+	for label, candidate in candidates:
+		if not candidate.exists():
+			if label == "primary":
+				LOG.warning("Profile file %s not found; using embedded defaults", candidate)
+			else:
+				LOG.info("Override profile %s not present; skipping", candidate)
+			continue
 		try:
 			with candidate.open("r", encoding="utf-8") as handle:
 				data = json.load(handle)
-			if isinstance(data, dict):
-				base.update(data)
-				LOG.info("Loaded profiles from %s", candidate)
 		except (json.JSONDecodeError, OSError) as exc:
-			LOG.warning("Failed to load profiles from %s (%s); using defaults", candidate, exc)
-	else:
-		LOG.warning("Profile file %s not found; using embedded defaults", candidate)
-	return Profiles(base)
+			if label == "primary":
+				LOG.warning("Failed to load profiles from %s (%s); using defaults", candidate, exc)
+			else:
+				LOG.warning("Failed to load override profiles from %s (%s); falling back", candidate, exc)
+			continue
+		if isinstance(data, dict):
+			base.update(data)
+			resolved_label = label
+			resolved_path = candidate
+			LOG.info("Loaded %s profiles from %s", label, candidate)
+			break
+		LOG.warning("Profile file %s did not contain a JSON object; ignoring", candidate)
+	return Profiles(base), resolved_label, resolved_path
+
+
+def write_profile_status(
+	status_path: Optional[str],
+	source_label: str,
+	profile_path: Optional[Path],
+	profiles: Profiles,
+) -> None:
+	if not status_path:
+		return
+	payload = {
+		"source": source_label,
+		"profile_path": str(profile_path) if profile_path else None,
+		"timestamp": datetime.now(timezone.utc).isoformat(),
+		"meta": profiles.data.get("meta"),
+	}
+	try:
+		target = Path(status_path)
+		target.parent.mkdir(parents=True, exist_ok=True)
+		with target.open("w", encoding="utf-8") as handle:
+			json.dump(payload, handle, indent=2)
+	except OSError as exc:
+		LOG.warning("Failed to persist profile status to %s (%s)", status_path, exc)
 
 
 def _resolve_probability(raw_value: object) -> float:
@@ -451,6 +500,7 @@ def sample_share(
 	return min(max(value, 0.0), 0.95)
 
 
+	# Escritor local para persistir la muestra en formato JSONL
 class JsonlWriter:
 	def __init__(self, path: str) -> None:
 		self._path = Path(path)
@@ -462,7 +512,7 @@ class JsonlWriter:
 		LOG.info("Writing synthetic stream to %s", self._path)
 		return self
 
-	def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
+	def __exit__(self, exc_type, exc, tb) -> None:
 		if self._file:
 			self._file.flush()
 			self._file.close()
@@ -475,31 +525,7 @@ class JsonlWriter:
 		self._file.flush()
 
 
-class KafkaWriter:
-	def __init__(self, bootstrap: str, topic: str) -> None:
-		if KafkaProducer is None:
-			raise RuntimeError("kafka-python is required for Kafka sink but is not installed")
-		servers = [server.strip() for server in bootstrap.split(",") if server.strip()]
-		if not servers:
-			raise ValueError("At least one Kafka bootstrap server must be provided")
-		self._producer = KafkaProducer(  # type: ignore[call-arg]
-			bootstrap_servers=servers,
-			value_serializer=lambda value: json.dumps(value).encode("utf-8"),
-		)
-		self._topic = topic
-		LOG.info("Kafka writer initialised for topic %s", topic)
-
-	def __enter__(self) -> "KafkaWriter":
-		return self
-
-	def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
-		self._producer.flush()
-		self._producer.close()
-
-	def write(self, payload: Dict[str, object]) -> None:
-		self._producer.send(self._topic, payload)
-
-
+	# Escritor WebHDFS que empaqueta lotes antes de subirlos
 class WebHDFSWriter:
 	def __init__(
 		self,
@@ -530,7 +556,7 @@ class WebHDFSWriter:
 		LOG.info("Buffering synthetic batch before upload to HDFS path %s", self.hdfs_path)
 		return self
 
-	def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
+	def __exit__(self, exc_type, exc, tb) -> None:
 		if not self._temp_file or not self._local_path or not self.hdfs_path:
 			return
 		try:
@@ -552,10 +578,12 @@ class WebHDFSWriter:
 	def write(self, payload: Dict[str, object]) -> None:
 		if self._temp_file is None:
 			raise RuntimeError("Writer is not opened")
+
 		self._temp_file.write(json.dumps(payload, separators=(",", ":")) + "\n")
 		self._temp_file.flush()
 
 
+	# Coordinador que escribe en todas las salidas configuradas
 class MultiWriter:
 	def __init__(self, writers: Sequence[object]) -> None:
 		self._writers = list(writers)
@@ -568,7 +596,7 @@ class MultiWriter:
 			self._active.append(entered)
 		return self
 
-	def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
+	def __exit__(self, exc_type, exc, tb) -> None:
 		for writer in reversed(self._writers):
 			if hasattr(writer, "__exit__"):
 				writer.__exit__(exc_type, exc, tb)
@@ -579,13 +607,14 @@ class MultiWriter:
 			writer.write(payload)
 
 	def rotate(self) -> None:
-		"""Force all writers to close and reopen to flush intermediate buffers."""
+		# Se fuerza la rotación para evitar buffers pendientes en los escritores
 		if not self._writers:
 			return
 		self.__exit__(None, None, None)
 		self.__enter__()
 
 
+	# Generador central que aplica las distribuciones sintéticas
 class SyntheticRecordGenerator:
 	def __init__(self, profiles: Profiles) -> None:
 		self.profiles = profiles
@@ -818,6 +847,7 @@ class SyntheticRecordGenerator:
 		}
 
 
+# Bucle que gobierna la cadencia de envío y las rotaciones de archivos
 class ProducerRunner:
 	def __init__(
 		self,
@@ -863,13 +893,15 @@ def configure_logging(level: str) -> None:
 	)
 
 
-def _handle_stop(signum: int, frame: object) -> None:  # pragma: no cover - signal handler
+# Maneja señales del sistema para detener el productor con suavidad
+def _handle_stop(signum: int, frame: object) -> None:
 	del signum, frame
 	global STOP_REQUESTED
 	STOP_REQUESTED = True
 	LOG.info("Termination signal received; shutting down producer loop")
 
 
+# Punto de entrada principal del productor
 def main(argv: Optional[Iterable[str]] = None) -> int:
 	args = parse_args(argv)
 	configure_logging(args.log_level)
@@ -880,7 +912,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 	signal.signal(signal.SIGTERM, _handle_stop)
 	signal.signal(signal.SIGINT, _handle_stop)
 
-	profiles = load_profiles(args.profile_path)
+	profiles, profile_source, profile_path = load_profiles(args.profile_path, args.profile_override_path)
+	write_profile_status(args.profile_status_path, profile_source, profile_path, profiles)
 	generator = SyntheticRecordGenerator(profiles)
 
 	try:
@@ -892,12 +925,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 	sinks: List[object] = []
 	if "file" in sink_targets:
 		sinks.append(JsonlWriter(args.output_path))
-	if "kafka" in sink_targets:
-		try:
-			sinks.append(KafkaWriter(args.kafka_bootstrap, args.kafka_topic))
-		except Exception as exc:  # pragma: no cover - defer failure reporting to logs
-			LOG.error("Failed to initialise Kafka writer: %s", exc)
-			return 1
 	if "hdfs" in sink_targets:
 		client = WebHDFSClient(base_url=args.webhdfs_url, user=args.hdfs_user)
 		try:

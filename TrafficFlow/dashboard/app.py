@@ -5,7 +5,7 @@ import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import requests
@@ -22,6 +22,8 @@ REFRESH_INTERVAL_SECONDS = float(os.getenv("STREAM_REFRESH_SECONDS", "2"))
 DEFAULT_WINDOW_MINUTES = int(os.getenv("STREAM_WINDOW_MINUTES", "15"))
 HISTORY_MINUTES = int(os.getenv("STREAM_HISTORY_MINUTES", "1440"))
 MAX_FILES = int(os.getenv("STREAM_MAX_FILES", "12"))
+PROFILE_STATUS_PATH = os.getenv("PROFILE_STATUS_PATH", "").strip()
+PROFILE_OVERRIDE_PATH = os.getenv("PROFILE_OVERRIDE_PATH", "").strip()
 
 VEHICLE_SHARE_COLUMNS: Sequence[str] = (
     "pedal_cycle_count",
@@ -341,9 +343,45 @@ def aggregate_vehicle_columns(df: pd.DataFrame, columns: Sequence[str]) -> pd.Se
     return totals
 
 
+def _load_profile_status() -> Optional[Dict[str, object]]:
+    path = PROFILE_STATUS_PATH
+    if path and os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                return payload
+        except (OSError, json.JSONDecodeError):
+            pass
+    if PROFILE_OVERRIDE_PATH and os.path.exists(PROFILE_OVERRIDE_PATH):
+        return {
+            "source": "override",
+            "profile_path": PROFILE_OVERRIDE_PATH,
+        }
+    return None
+
+
+def _render_profile_banner() -> None:
+    status = _load_profile_status()
+    if not status:
+        st.caption("Perfil de generación: sin información disponible.")
+        return
+    source = str(status.get("source", "")).lower()
+    meta = status.get("meta") if isinstance(status.get("meta"), dict) else {}
+    dataset_hint = meta.get("input_path") or status.get("profile_path")
+    if source == "override":
+        hint = f"{dataset_hint}" if dataset_hint else "dataset raw detectado"
+        st.success(f"Perfil activo derivado de CSV ({hint}).")
+    elif source == "primary":
+        st.info("Perfil personalizado preexistente en uso.")
+    else:
+        st.warning("Perfil por defecto embebido en uso.")
+
+
 def main() -> None:
     st.set_page_config(page_title="Monitor de tráfico TrafficFlow", layout="wide")
     st.title("Monitor de tráfico en vivo")
+    _render_profile_banner()
     st.caption(f"Monitoreando ruta HDFS {HDFS_BASE_PATH}")
 
     window_minutes = DEFAULT_WINDOW_MINUTES
@@ -537,18 +575,30 @@ def main() -> None:
                     "Total",
                 )
 
+            accumulated_region_df = (
+                st.session_state.records[
+                    st.session_state.records["region_name"] == selected_region
+                ]
+                if "region_name" in st.session_state.records.columns
+                else pd.DataFrame()
+            )
+
             road_counts = (
-                region_focus_df["road_name"].dropna().value_counts().head(10)
-                if "road_name" in region_focus_df.columns
+                accumulated_region_df.dropna(subset=["road_name"])
+                .groupby("road_name")["total_vehicles"]
+                .sum()
+                .sort_values(ascending=False)
+                .head(10)
+                if not accumulated_region_df.empty and "total_vehicles" in accumulated_region_df.columns
                 else pd.Series(dtype=float)
             )
             with region_cols[1]:
                 if road_counts.empty or road_counts.sum() == 0:
-                    st.info("No hay información de calles para la región seleccionada.")
+                    st.info("No hay información histórica de calles para la región seleccionada.")
                 else:
                     render_pie_chart(
                         road_counts,
-                        f"Calles con mayor concurrencia en {selected_region}",
+                        f"Vehículos acumulados por calle en {selected_region}",
                     )
 
     st.subheader("Registros más recientes")

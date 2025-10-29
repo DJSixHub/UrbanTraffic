@@ -108,6 +108,26 @@ services:
     networks:
       - hadoop
 
+  profile-builder:
+    image: bde2020/spark-master:3.2.1-hadoop3.2
+    container_name: tf-profile-builder
+    depends_on:
+      hdfs-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+    entrypoint:
+      - /bin/bash
+      - /bootstrap/profile_bootstrap.sh
+    volumes:
+      - ./analytics/jobs:/opt/spark-apps:ro
+      - ./data/raw:/opt/raw:ro
+      - ./data/generated_profiles:/opt/profiles
+      - ./scripts/profile_bootstrap.sh:/bootstrap/profile_bootstrap.sh:ro
+    restart: "no"
+    networks:
+      - hadoop
+
   producer:
     build:
       context: ./producer_service
@@ -119,6 +139,8 @@ services:
         condition: service_started
       hdfs-bootstrap:
         condition: service_completed_successfully
+      profile-builder:
+        condition: service_completed_successfully
     environment:
       - PROFILES_PATH=/opt/producer/profiles/distributions.json
       - OUTPUT_PATH=/opt/producer/output/traffic_stream.jsonl
@@ -128,9 +150,12 @@ services:
       - WEBHDFS_URL=http://namenode:9870
       - HDFS_USER=hdfs
       - HDFS_BASE_PATH=/data/gold/synthetic
+      - PROFILE_OVERRIDE_PATH=/opt/producer/generated/distributions.json
+      - PROFILE_STATUS_PATH=/opt/producer/generated/profile_status.json
     volumes:
       - ./analytics/jobs/producer:/opt/producer/profiles:ro
       - ./data/synthetic:/opt/producer/output
+      - ./data/generated_profiles:/opt/producer/generated
     restart: unless-stopped
     networks:
       - hadoop
@@ -152,8 +177,12 @@ services:
       - HDFS_BASE_PATH=/data/gold/synthetic
       - STREAM_WINDOW_MINUTES=15
       - STREAM_REFRESH_SECONDS=2
+      - PROFILE_STATUS_PATH=/opt/dashboard/generated_profiles/profile_status.json
+      - PROFILE_OVERRIDE_PATH=/opt/dashboard/generated_profiles/distributions.json
     ports:
       - "8501:8501"
+    volumes:
+      - ./data/generated_profiles:/opt/dashboard/generated_profiles:ro
     networks:
       - hadoop
 
