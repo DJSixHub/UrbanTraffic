@@ -1,0 +1,19 @@
+{
+  "batch_id": 123,
+  "last_flush_time": 1763940363.736844,
+  "total_events": 500,
+  "gold_records": 125,
+  "kafka_topics": [
+    "traffic.raw.east-midlands",
+    "traffic.raw.east-of-england",
+    "traffic.raw.london",
+    "traffic.raw.north-east",
+    "traffic.raw.north-west",
+    "traffic.raw.scotland",
+    "traffic.raw.south-east",
+    "traffic.raw.south-west",
+    "traffic.raw.wales",
+    "traffic.raw.west-midlands",
+    "traffic.raw.yorkshire-and-the-humber"
+  ]
+}

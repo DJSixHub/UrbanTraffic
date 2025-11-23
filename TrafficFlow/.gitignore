@@ -1,0 +1,12 @@
+docker-compose.yaml
+docker-compose.generated.yml
+__pycache__/
+*.pyc
+.data/
+*.egg-info/
+
+# Runtime state folders
+/data/receiver_status/
+/data/calculator_status/
+/data/management_status/
+/data/synthetic/

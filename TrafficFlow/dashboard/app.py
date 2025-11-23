@@ -16,7 +16,7 @@ import altair as alt
 import plotly.express as px
 
 WEBHDFS_URL = os.getenv("WEBHDFS_URL", "http://localhost:9870").rstrip("/")
-HDFS_BASE_PATH = os.getenv("HDFS_BASE_PATH", "/data/gold/synthetic").rstrip("/") or "/"
+HDFS_BASE_PATH = os.getenv("HDFS_BASE_PATH", "/data/gold/management/primary").rstrip("/") or "/"
 HDFS_USER = os.getenv("HDFS_USER", "hdfs")
 REFRESH_INTERVAL_SECONDS = float(os.getenv("STREAM_REFRESH_SECONDS", "2"))
 DEFAULT_WINDOW_MINUTES = int(os.getenv("STREAM_WINDOW_MINUTES", "15"))
@@ -107,32 +107,30 @@ def read_hdfs_file(path: str) -> List[Dict[str, object]]:
 
 
 def discover_recent_files() -> List[Dict[str, object]]:
-    partitions = list_status(HDFS_BASE_PATH)
     entries: List[Dict[str, object]] = []
-    for partition in partitions:
-        if partition.get("type") != "DIRECTORY":
-            continue
-        suffix = partition.get("pathSuffix")
-        if not suffix:
-            continue
-        partition_path = f"{HDFS_BASE_PATH}/{suffix}" if HDFS_BASE_PATH != "/" else f"/{suffix}"
+
+    def _walk(base_path: str, depth: int) -> None:
         try:
-            files = list_status(partition_path)
+            statuses = list_status(base_path)
         except RuntimeError:
-            continue
-        for file_status in files:
-            if file_status.get("type") != "FILE":
+            return
+        for status in statuses:
+            suffix = status.get("pathSuffix")
+            if not suffix:
                 continue
-            name = file_status.get("pathSuffix")
-            if not name:
-                continue
-            entries.append(
-                {
-                    "path": f"{partition_path}/{name}",
-                    "length": int(file_status.get("length", 0)),
-                    "mod": int(file_status.get("modificationTime", 0)),
-                }
-            )
+            full_path = f"{base_path}/{suffix}" if base_path != "/" else f"/{suffix}"
+            if status.get("type") == "FILE":
+                entries.append(
+                    {
+                        "path": full_path,
+                        "length": int(status.get("length", 0)),
+                        "mod": int(status.get("modificationTime", 0)),
+                    }
+                )
+            elif depth < 3 and status.get("type") == "DIRECTORY":
+                _walk(full_path, depth + 1)
+
+    _walk(HDFS_BASE_PATH, 0)
     entries.sort(key=lambda item: item["mod"])
     return entries[-MAX_FILES:]
 
@@ -173,10 +171,12 @@ def normalise_records(rows: List[Dict[str, object]]) -> pd.DataFrame:
         if candidate in frame.columns:
             ts_col = candidate
             break
-    if ts_col is None:
-        frame["event_timestamp"] = datetime.now(timezone.utc)
-    else:
+    if ts_col is not None:
         frame["event_timestamp"] = pd.to_datetime(frame[ts_col], utc=True, errors="coerce")
+    elif "batch_timestamp" in frame.columns:
+        frame["event_timestamp"] = pd.to_datetime(frame["batch_timestamp"], unit="s", utc=True, errors="coerce")
+    else:
+        frame["event_timestamp"] = datetime.now(timezone.utc)
 
     if "region_name" not in frame.columns:
         frame["region_name"] = "Unknown"
@@ -186,11 +186,10 @@ def normalise_records(rows: List[Dict[str, object]]) -> pd.DataFrame:
         if candidate in frame.columns:
             total_col = candidate
             break
-    frame["total_vehicles"] = (
-        pd.to_numeric(frame[total_col], errors="coerce").fillna(0).astype(int)
-        if total_col is not None
-        else pd.Series(0, index=frame.index, dtype="int64")
-    )
+    if total_col is not None:
+        frame["total_vehicles"] = pd.to_numeric(frame[total_col], errors="coerce").fillna(0).astype(int)
+    else:
+        frame["total_vehicles"] = pd.Series(0, index=frame.index, dtype="int64")
 
     density_col = None
     for candidate in ("vehicles_per_kilometer", "vehicles_per_km", "density"):
@@ -214,10 +213,36 @@ def normalise_records(rows: List[Dict[str, object]]) -> pd.DataFrame:
         else frame.filter(like="heavy_goods_vehicle_").apply(pd.to_numeric, errors="coerce").fillna(0).astype(int).sum(axis=1)
     )
 
-    if float(frame["vehicles_per_km"].abs().sum()) == 0.0 and "link_length_kilometers" in frame.columns:
-        link_lengths = pd.to_numeric(frame["link_length_kilometers"], errors="coerce").replace(0, float("nan"))
-        derived_density = frame["total_vehicles"] / link_lengths
-        frame["vehicles_per_km"] = derived_density.fillna(0.0)
+    if float(frame["vehicles_per_km"].abs().sum()) == 0.0:
+        if "link_length_kilometers" in frame.columns:
+            link_lengths = pd.to_numeric(frame["link_length_kilometers"], errors="coerce").replace(0, float("nan"))
+            derived_density = frame["total_vehicles"] / link_lengths
+            frame["vehicles_per_km"] = derived_density.fillna(0.0)
+        elif "avg_vehicles" in frame.columns:
+            frame["vehicles_per_km"] = pd.to_numeric(frame["avg_vehicles"], errors="coerce").fillna(0.0)
+
+    aggregated_vehicle_map = {
+        "pedal_cycle_total": "pedal_cycle_count",
+        "two_wheeled_total": "two_wheeled_motor_vehicle_count",
+        "car_and_taxi_total": "car_and_taxi_count",
+        "bus_and_coach_total": "bus_and_coach_count",
+        "light_goods_total": "light_goods_vehicle_count",
+        "hgv2_total": "heavy_goods_vehicle_2_rigid_axles_count",
+        "hgv3_total": "heavy_goods_vehicle_3_rigid_axles_count",
+        "hgv4_total": "heavy_goods_vehicle_4_plus_rigid_axles_count",
+        "hgv34_total": "heavy_goods_vehicle_3_or_4_articulated_axles_count",
+        "hgv5_total": "heavy_goods_vehicle_5_articulated_axles_count",
+        "hgv6_total": "heavy_goods_vehicle_6_articulated_axles_count",
+    }
+
+    for source_col, target_col in aggregated_vehicle_map.items():
+        if source_col in frame.columns:
+            frame[target_col] = pd.to_numeric(frame[source_col], errors="coerce").fillna(0).astype(int)
+
+    if "role" in frame.columns:
+        frame["role"] = frame["role"].fillna("primary").astype(str)
+    else:
+        frame["role"] = "primary"
 
     return frame
 
@@ -274,7 +299,7 @@ def render_pie_chart(data: pd.Series, title: str) -> None:
         values="Valor",
         title=title,
     )
-    fig.update_traces(hovertemplate="%{label}: %{value:,}")
+    fig.update_traces(hovertemplate="%{label}: %{value:,} vehículos (%{percent:.1%})")
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -417,12 +442,24 @@ def main() -> None:
             combined = prune_history(combined, HISTORY_MINUTES)
             st.session_state.records = combined
 
+            if "role" in st.session_state.records.columns:
+                st.session_state.records["role"] = (
+                    st.session_state.records["role"].fillna("primary").astype(str)
+                )
+            else:
+                st.session_state.records["role"] = "primary"
+
+            latest_primary = (
+                latest_df[latest_df["role"] != "authority"].copy()
+                if "role" in latest_df.columns
+                else latest_df
+            )
             vehicles_added = float(
-                pd.to_numeric(latest_df["total_vehicles"], errors="coerce").fillna(0).sum()
+                pd.to_numeric(latest_primary["total_vehicles"], errors="coerce").fillna(0).sum()
             )
             region_count = (
-                latest_df["region_name"].dropna().nunique()
-                if "region_name" in latest_df.columns
+                latest_primary["region_name"].dropna().nunique()
+                if "region_name" in latest_primary.columns
                 else 0
             )
             if region_count > 0 and vehicles_added > 0:
@@ -440,6 +477,13 @@ def main() -> None:
             [st.session_state.increment_history, history_row], ignore_index=True
         ).tail(500)
 
+    if "role" in st.session_state.records.columns:
+        st.session_state.records["role"] = (
+            st.session_state.records["role"].fillna("primary").astype(str)
+        )
+    else:
+        st.session_state.records["role"] = "primary"
+
     live_df = st.session_state.records.copy()
     live_df = filter_window(live_df, window_minutes)
 
@@ -456,12 +500,24 @@ def main() -> None:
         time.sleep(refresh_seconds)
         st.rerun()
 
-    metrics_row = st.columns(3)
-    metrics_row[0].metric("Registros (ventana)", f"{len(live_df):,}")
-    metrics_row[1].metric("Vehículos (ventana)", f"{live_df['total_vehicles'].sum():,}")
-    metrics_row[2].metric("Promedio vehículos/km", f"{live_df['vehicles_per_km'].mean():.1f}")
+    if "role" in live_df.columns:
+        authority_df = live_df[live_df["role"] == "authority"].copy()
+        primary_df = live_df[live_df["role"] != "authority"].copy()
+    else:
+        authority_df = pd.DataFrame(columns=live_df.columns)
+        primary_df = live_df.copy()
 
-    region_totals, region_density = compute_region_metrics(live_df)
+    if primary_df.empty:
+        primary_df = live_df.copy()
+
+    effective_df = primary_df
+
+    metrics_row = st.columns(3)
+    metrics_row[0].metric("Registros (ventana)", f"{len(effective_df):,}")
+    metrics_row[1].metric("Vehículos (ventana)", f"{effective_df['total_vehicles'].sum():,}")
+    metrics_row[2].metric("Promedio vehículos/km", f"{effective_df['vehicles_per_km'].mean():.1f}")
+
+    region_totals, region_density = compute_region_metrics(effective_df)
 
     eventos_df = st.session_state.increment_history.rename(
         columns={
@@ -547,25 +603,39 @@ def main() -> None:
     with pie_row[0]:
         render_pie_chart(region_totals, "Participación de vehículos por región")
     with pie_row[1]:
-        vehicle_share = aggregate_vehicle_columns(live_df, VEHICLE_SHARE_COLUMNS).sort_values(
+        vehicle_share = aggregate_vehicle_columns(effective_df, VEHICLE_SHARE_COLUMNS).sort_values(
             ascending=False
         )
         render_pie_chart(vehicle_share, "Distribución por tipo de vehículo")
 
-    region_options = sorted(live_df["region_name"].dropna().unique().tolist())
+    region_options = sorted(effective_df["region_name"].dropna().unique().tolist())
     if region_options:
-        selected_region = st.selectbox("Región a analizar", region_options)
-        region_focus_df = live_df[live_df["region_name"] == selected_region]
-        region_breakdown = aggregate_vehicle_columns(
-            region_focus_df, VEHICLE_BREAKDOWN_COLUMNS
+        st.markdown("### Exploración jerárquica")
+        selected_region = st.selectbox("Región a analizar", region_options, key="region_selector")
+        region_window_df = effective_df[effective_df["region_name"] == selected_region]
+        region_vehicle_breakdown = aggregate_vehicle_columns(
+            region_window_df, VEHICLE_BREAKDOWN_COLUMNS
         ).sort_values(ascending=False)
-        if region_breakdown.empty or region_breakdown.sum() == 0:
-            st.info("No hay desglose de vehículos para la región seleccionada en esta ventana.")
-        else:
-            region_cols = st.columns(2)
-            breakdown_df = region_breakdown.reset_index()
-            breakdown_df.columns = ["Tipo de vehículo", "Total"]
-            with region_cols[0]:
+
+        has_local_authority = not authority_df.empty and "local_authority_name" in authority_df.columns
+
+        region_authority_totals = (
+            authority_df[authority_df["region_name"] == selected_region]
+            .dropna(subset=["local_authority_name"])
+            .groupby("local_authority_name")["total_vehicles"]
+            .sum()
+            .sort_values(ascending=False)
+            if has_local_authority
+            else pd.Series(dtype=float)
+        )
+
+        region_cols = st.columns(2)
+        with region_cols[0]:
+            if region_vehicle_breakdown.empty or region_vehicle_breakdown.sum() == 0:
+                st.info("No hay desglose de vehículos para la región seleccionada en esta ventana.")
+            else:
+                breakdown_df = region_vehicle_breakdown.reset_index()
+                breakdown_df.columns = ["Tipo de vehículo", "Total"]
                 render_bar_chart(
                     breakdown_df,
                     "Tipo de vehículo",
@@ -575,30 +645,80 @@ def main() -> None:
                     "Total",
                 )
 
-            accumulated_region_df = (
+        with region_cols[1]:
+            if region_authority_totals.empty or region_authority_totals.sum() == 0:
+                st.info("No hay tráfico registrado por autoridad local en la región seleccionada.")
+            else:
+                render_pie_chart(
+                    region_authority_totals,
+                    f"Participación de autoridades locales en {selected_region}",
+                )
+
+        authority_options = region_authority_totals.index.tolist()
+        if has_local_authority and authority_options:
+            authority_key = f"authority_selector_{selected_region.lower().replace(' ', '_')}"
+            selected_authority = st.selectbox(
+                "Autoridad local a analizar",
+                authority_options,
+                key=authority_key,
+            )
+            authority_window_df = authority_df[
+                (authority_df["region_name"] == selected_region)
+                & (authority_df["local_authority_name"] == selected_authority)
+            ]
+            authority_vehicle_breakdown = aggregate_vehicle_columns(
+                authority_window_df, VEHICLE_BREAKDOWN_COLUMNS
+            ).sort_values(ascending=False)
+
+            authority_history_df = (
                 st.session_state.records[
-                    st.session_state.records["region_name"] == selected_region
+                    (st.session_state.records["role"] == "authority")
+                    & (st.session_state.records["region_name"] == selected_region)
+                    & (st.session_state.records["local_authority_name"] == selected_authority)
                 ]
-                if "region_name" in st.session_state.records.columns
+                if {
+                    "region_name",
+                    "local_authority_name",
+                    "total_vehicles",
+                    "role",
+                }.issubset(st.session_state.records.columns)
                 else pd.DataFrame()
             )
 
+            authority_cols = st.columns(2)
+            with authority_cols[0]:
+                if authority_vehicle_breakdown.empty or authority_vehicle_breakdown.sum() == 0:
+                    st.info("Sin desglose por tipo de vehículo para la autoridad seleccionada.")
+                else:
+                    breakdown_df = authority_vehicle_breakdown.reset_index()
+                    breakdown_df.columns = ["Tipo de vehículo", "Total"]
+                    render_bar_chart(
+                        breakdown_df,
+                        "Tipo de vehículo",
+                        "Total",
+                        f"Desglose en {selected_authority}",
+                        "Tipo de vehículo",
+                        "Total",
+                    )
+
+            has_road_details = "road_name" in authority_history_df.columns
             road_counts = (
-                accumulated_region_df.dropna(subset=["road_name"])
+                authority_history_df.dropna(subset=["road_name"])
                 .groupby("road_name")["total_vehicles"]
                 .sum()
                 .sort_values(ascending=False)
-                .head(10)
-                if not accumulated_region_df.empty and "total_vehicles" in accumulated_region_df.columns
+                .head(12)
+                if has_road_details and not authority_history_df.empty
                 else pd.Series(dtype=float)
             )
-            with region_cols[1]:
+
+            with authority_cols[1]:
                 if road_counts.empty or road_counts.sum() == 0:
-                    st.info("No hay información histórica de calles para la región seleccionada.")
+                    st.info("No hay información histórica de calles para la autoridad seleccionada.")
                 else:
                     render_pie_chart(
                         road_counts,
-                        f"Vehículos acumulados por calle en {selected_region}",
+                        f"Participación de calles en {selected_authority}",
                     )
 
     st.subheader("Registros más recientes")

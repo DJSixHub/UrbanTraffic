@@ -1,195 +1,100 @@
-# UrbanTraffic / TrafficFlow – Streaming Data Lab
+# TrafficFlow · Plataforma Distribuida
 
-Este repositorio contiene un entorno reproducible basado en Docker para generar, almacenar y visualizar datos sintéticos de tráfico utilizando Hadoop (HDFS + YARN), Spark y un dashboard Streamlit. El productor escribe continuamente en HDFS mediante WebHDFS y también deja una copia local para depuración.
+TrafficFlow levanta una cadena moderna de ingesta: generadores sintéticos por región publican eventos en Kafka, un pipeline los consolida en HDFS (*silver/gold*) y un dashboard Streamlit permite inspeccionar la actividad en tiempo real. Todo se orquesta desde un `docker-compose.yaml` autogenerado por `scripts/generate_pipeline.py`, de modo que el entorno siempre refleja el dataset y los límites vigentes.
 
-## Requisitos
+## Requisitos previos
+- Docker Desktop (o Engine 24+) con Docker Compose v2
+- Python 3.11+ para correr `scripts/generate_pipeline.py`
+- (Opcional) `pandas` instalado para recalcular perfiles desde CSV
 
-- Docker Desktop (o Docker Engine) 24+
-- Docker Compose v2
-- Opcional: Python 3.11+ si deseas ejecutar utilidades fuera de los contenedores
+## Flujo operativo
+1. **Generar artefactos** – `python scripts/generate_pipeline.py` construye perfiles regionales a partir de `data/raw/clean_data.csv` (o cae al `fallback_distributions.json`), prepara directorios de estado y reescribe `docker-compose.yaml` con los servicios y límites actualizados.
+2. **Arrancar la plataforma** – `docker compose up -d --build` compila las imágenes locales, inicia Hadoop (namenode/datanode) y Kafka, ejecuta el *bootstrap* de HDFS y luego enciende generadores, pipeline y dashboard en orden.
+3. **Producción de eventos** – Cada contenedor `tf-generator-<región>` lee su perfil, genera eventos JSON (1 por vehículo) y:
+	- publica individualmente en Kafka (`traffic.raw.<región>`),
+	- mantiene archivos rotados en `data/synthetic/<región>` como respaldo.
+4. **Procesamiento en Kafka ➜ HDFS** – `tf-pipeline` acumula los eventos por lotes, persiste la capa *silver* particionada (`/data/silver/regions/<slug>/dt=YYYYMMDD/hour=HH/`) y, tras cada descarga, calcula agregados *gold* de dos niveles:
+	- `role=primary`: totales por región,
+	- `role=authority`: totales por autoridad local dentro de cada región.
+	El estado de la corrida queda en `data/pipeline_status/pipeline.json`.
+5. **Visualización** – `tf-dashboard` (Streamlit en `http://localhost:8501`) lee la capa *gold* vía WebHDFS, muestra métricas globales o por región y permite bajar al detalle de autoridad local cuando los agregados existen.
+6. **Apagado y limpieza** – `docker compose down` detiene los servicios; añade `-v` para descartar volúmenes y reiniciar desde cero (útil para rehacer perfiles o limpiar Kafka).
 
-## Vista general del stack
+## Componentes y responsabilidades
 
-Servicios definidos en `docker-compose.yml`:
+**Hadoop + Kafka**
+- `tf-namenode` / `tf-datanode`: exponen HDFS (WebHDFS 9870) y montan `./data` para compartir resultados con el host.
+- `tf-hdfs-bootstrap`: job efímero que crea `/data/{bronze,silver,gold}` y rutas auxiliares.
+- `tf-kafka`: broker Bitnami en modo Kraft con auto creación de tópicos habilitada.
 
-- `namenode` / `datanode`: HDFS 3.2 con WebHDFS habilitado.
-- `resourcemanager` / `nodemanager`: YARN para ejecutar jobs batch (Spark).
-- `spark-master` / `spark-worker`: clúster Spark standalone listo para `spark-submit`.
-- `hdfs-bootstrap`: job efímero que prepara `/data/gold/synthetic` en HDFS.
-- `profile-builder`: job efímero que busca CSV en `data/raw/` y genera un perfil JSON para el productor.
-- `producer`: generador sintético de tráfico que rota archivos y los sube a HDFS.
-- `dashboard`: Streamlit que consume HDFS en tiempo casi real e informa qué perfil está activo.
-## Flujo de trabajo detallado
+**Generadores**
+- 11 containers `tf-generator-<slug>` (uno por región) leen el perfil correspondiente, calculan vehículos por minuto a partir de distribuciones horarias, eligen carretera ponderada y emiten el evento.
+- Variables clave: `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_TOPIC`, `ROTATE_RECORDS`, `RATE_PER_MINUTE`.
 
-1. **Inicialización de HDFS**  
-   - Contenedor: `hdfs-bootstrap` (basado en la imagen Hadoop NameNode).  
-   - Script: `scripts/bootstrap_hdfs.sh` (montado como solo lectura).  
-   - Acciones: espera a que el NameNode salga de *safe mode*, crea `/data/gold/synthetic` y ajusta permisos. Vive dentro del clúster HDFS (misma red que `namenode` y `datanode`).
+**Pipeline**
+- `tf-pipeline` consume los tópicos definidos en `KAFKA_TOPICS`, controla la ventana de flush con `BATCH_SIZE` y `FLUSH_INTERVAL_SECONDS`, escribe silver/gold en HDFS y actualiza el JSON de estado.
+- Las filas *gold* incluyen campos `role`, `region_name`, `local_authority_name` (cuando aplica), totales, promedios y desgloses por categoría de vehículo.
 
-2. **Generación de perfiles desde CSV raw**  
-   - Contenedor: `profile-builder` (imagen Spark Master ejecutada como job efímero).  
-   - Script principal: `analytics/jobs/build_producer_profiles.py` ejecutado con `spark-submit` en modo local dentro del contenedor.  
-   - Origen de datos: bind mount `./data/raw` accesible como `/opt/raw` (host). No se copia a HDFS.  
-   - Salida: `./data/generated_profiles/distributions.json` y `profile_status.json`, compartidos mediante bind mount con el productor y el dashboard.  
-   - Rol en el clúster: usa el runtime Spark empaquetado en el contenedor; no depende del Spark Master del stack, pero comparte la red Hadoop.
+**Dashboard**
+- `tf-dashboard` usa WebHDFS (`WEBHDFS_URL`) para leer los archivos *gold* y convierte los registros en vistas agregadas, gráficos de barras/lineas, tortas y tablas. La sección de autoridad local solo aparece si existen registros `role=authority`.
 
-3. **Servicio de producción de eventos**  
-   - Contenedor: `producer` (imagen Python construida en `./producer_service`).  
-   - Código clave: `producer_service/app/main.py` y `webhdfs_client.py`.  
-   - Entrada: perfiles (`/opt/producer/generated/distributions.json` si existe, de lo contrario `/opt/producer/profiles/distributions.json`).  
-   - Flujo de datos: genera 1500 registros/minuto; cada 500 registros rota y escribe un archivo local (`./data/synthetic/traffic_stream.jsonl`, bind mount) y a HDFS (`/data/gold/synthetic/dt=YYYYMMDD/...`) mediante WebHDFS.  
-   - Entorno: contenedor propio, conectado a la red Hadoop para hablar con NameNode/WebHDFS.
+## Datos y perfiles
+- `data/generated_profiles/distributions.json` describe velocidades base, desvíos y distribuciones por región/carretera.
+- `scripts/generate_pipeline.py` puede reconstruir esos perfiles desde CSV (requiere `pandas`) y guarda la fuente en `data/generated_profiles/profile_status.json` para que el dashboard muestre la procedencia.
+- Los archivos `data/synthetic/*.jsonl` almacenan copias locales de los eventos emitidos (útiles para depuración o cargas offline).
 
-4. **Almacenamiento en Hadoop**  
-   - Contenedores: `namenode` y `datanode` (clúster HDFS).  
-   - Los archivos JSONL generados viven dentro de HDFS y se persisten en los volúmenes Docker `namenode`/`datanode`.
+## Tasas de generación estimadas
+| Región | Vehículos/min (media) | Carreteras |
+| --- | ---: | ---: |
+| East Midlands | 118 | 247 |
+| East of England | 156 | 271 |
+| London | 179 | 308 |
+| North East | 74 | 135 |
+| North West | 215 | 378 |
+| Scotland | 74 | 355 |
+| South East | 293 | 369 |
+| South West | 123 | 309 |
+| Wales | 56 | 235 |
+| West Midlands | 155 | 249 |
+| Yorkshire and The Humber | 138 | 216 |
 
-5. **Dashboard en tiempo real**  
-   - Contenedor: `dashboard` (imagen Streamlit, carpeta `./dashboard`).  
-   - Código clave: `dashboard/app.py`.  
-   - Lectura: usa WebHDFS (`LISTSTATUS` + `OPEN`) para descubrir y leer los últimos archivos bajo `/data/gold/synthetic`.  
-   - Indicador de perfil: lee `./data/generated_profiles/profile_status.json` (bind mount) y muestra si el perfil proviene de CSV, de un override previo o de los defaults.  
-   - Visualizaciones: Altair y Plotly sobre la ventana móvil de datos.
+La generación real oscila alrededor de la media usando la desviación estándar horaria; las cifras anteriores sirven como referencia de carga.
 
-6. **Jobs batch opcionales**  
-   - Scripts en `analytics/jobs/data_cleaning.py` y `exploratory_queries.py`.  
-   - Ejecución: `docker compose exec spark-master spark-submit --master yarn ...`. Usan el clúster Spark (`spark-master`/`spark-worker`) apoyado en YARN (`resourcemanager`/`nodemanager`) y leen/escriben datasets en HDFS (`hdfs:///...`).
+## Límites de recursos por servicio
+| Servicio | RAM | CPU |
+| --- | --- | --- |
+| `tf-generator-*` | 96 MiB | 0.15 |
+| `tf-pipeline` | 320 MiB | 0.45 |
+| `tf-dashboard` | sin límite | (sin límite) |
+| `tf-kafka` | 512 MiB | 0.40 |
+| `tf-namenode` / `tf-datanode` | según imagen base | según imagen base |
 
-### Mapa de servicios y roles
+> **Sugerencia para hardware ajustado (~6 GiB RAM):** apaga temporalmente algunas regiones (`docker compose stop tf-generator-...`), reduce `KAFKA_TOPICS` o elimina volúmenes con `down -v` para evitar acumulación.
 
-- **Clúster HDFS**: `namenode`, `datanode`, `hdfs-bootstrap` (solo inicialización).  
-- **YARN**: `resourcemanager`, `nodemanager` (gestión de recursos para Spark en modo YARN).  
-- **Spark standalone**: `spark-master`, `spark-worker` (aceptan `spark-submit`; `profile-builder` reutiliza la imagen).  
-- **Aplicaciones auxiliares**: `producer` (generación continua), `dashboard` (consumo en vivo).
-## Estructura del repositorio
+## Comandos útiles
+- `python scripts/generate_pipeline.py` – Regenera perfiles y compose.
+- `docker compose up -d --build` – Compila imágenes locales e inicia todos los servicios.
+- `docker compose ps` – Revisa estado general de contenedores.
+- `docker compose logs tf-generator-london -f --tail 80` – Sigue un generador (sustituye región según necesidad).
+- `docker compose logs tf-pipeline -f --tail 120` – Observa ingestión, flushes y errores de HDFS.
+- `docker compose logs tf-dashboard -f --tail 80` – Verifica peticiones WebHDFS y renders del dashboard.
+- `docker compose exec kafka kafka-topics.sh --bootstrap-server localhost:9092 --list` – Lista tópicos disponibles.
+- `docker compose exec namenode hdfs dfs -ls /data/silver/regions` – Confirma que los lotes lleguen a HDFS.
+- `docker compose exec namenode hdfs dfs -tail /data/gold/management/primary/<archivo>.jsonl` – Inspecciona agregados recientes.
+- `docker compose down` / `docker compose down -v` – Apaga la pila (con o sin limpieza de volúmenes).
 
-```
-TrafficFlow/
-  docker-compose.yml          # Orquestación de todo el stack
-  analytics/
-    jobs/
-      data_cleaning.py        # Ejemplo de job Spark batch
-      exploratory_queries.py  # Consultas exploratorias sobre los datos limpios
-  producer_service/
-    app/main.py               # Lógica del productor y writers (file/HDFS)
-  dashboard/
-    app.py                    # Dashboard Streamlit apuntando a WebHDFS
-    requirements.txt          # Dependencias del contenedor de dashboard
-  data/
-    synthetic/                # Salida local del productor (bind mount)
-    generated_profiles/       # Perfiles calculados automáticamente al arrancar
-BD_Proyecto/
-  ...                         # CSV originales si deseas experimentos batch
-```
+## Estructura clave
+- `scripts/generate_pipeline.py` – Generador de perfiles y compose.
+- `producer_service/` – Servicio de generación sintética (Kafka + archivos).
+- `pipeline_service/` – Consumidor Kafka ➜ HDFS (*silver/gold*).
+- `dashboard/` – Aplicación Streamlit (monitor en vivo).
+- `data/` – Perfíl generado, salidas sintéticas, estados y métricas.
 
-## Puesta en marcha rápida
+## Diagnóstico rápido
+- `data/pipeline_status/pipeline.json` muestra el último lote procesado y los tópicos configurados.
+- El dashboard indica si el perfil activo proviene de CSV (override) o del fallback.
+- Si los generadores reinician, revisa permisos de `data/generated_profiles` (requieren lectura) y la resolución de `tf-kafka`.
+- Si el pipeline reporta `NoBrokersAvailable`, verifica que Kafka esté escuchando en `PLAINTEXT://tf-kafka:9092` (regenerar compose incluye el nombre correcto).
+- Para limpiar archivos *gold* atascados, elimina `/data/gold/management/primary/*.jsonl` mediante `hdfs dfs -rm` desde el contenedor `tf-namenode`.
 
-```powershell
-cd TrafficFlow
-docker compose up -d --build
-```
-
-## Comandos Docker útiles
-
-- Levantar todo con recompilación local: `docker compose up --build`
-- Arrancar en segundo plano sin reconstruir: `docker compose up -d`
-- Ver logs continuos del productor: `docker compose logs -f producer`
-- Listar archivos en HDFS: `docker compose exec namenode hdfs dfs -ls /data/gold/synthetic`
-- Mostrar el final de un lote HDFS: `docker compose exec namenode hdfs dfs -tail /data/gold/synthetic/dt=YYYYMMDD/traffic_stream_...jsonl`
-- Ejecutar un job Spark batch: `docker compose exec spark-master spark-submit --master yarn --deploy-mode client /opt/spark-apps/data_cleaning.py ...`
-- Detener servicios conservando datos: `docker compose down`
-- Reinicio limpio (borra volúmenes HDFS): `docker compose down -v`
-Un contenedor auxiliar `hdfs-bootstrap` espera a que HDFS salga de *safe mode* y crea la jerarquía `/data/gold/synthetic`, ajustando su propiedad a `hdfs:hdfs`. Así evitamos pasos manuales después de un reinicio limpio (`docker compose down -v`).
-
-Servicios expuestos:
-
-- Dashboard → http://localhost:8501
-- NameNode UI → http://localhost:9870
-- ResourceManager UI → http://localhost:8088
-- Spark Master UI → http://localhost:8080
-
-## Verificando que todo corre
-
-```powershell
-# Logs del productor (confirmar cargas a HDFS)
-docker compose logs producer --tail 50
-
-# Logs del dashboard
-docker compose logs dashboard --tail 20
-
-# Archivos generados en HDFS (WebHDFS path)
-docker compose exec namenode hdfs dfs -ls /data/gold/synthetic
-
-# Contenido local (útil para inspección rápida)
-Get-Content data/synthetic/traffic_stream.jsonl -Tail 5
-```
-
-El dashboard muestra:
-
-- Conteos del número de registros y vehículos en la ventana móvil (15 min)
-- Serie temporal de vehículos por minuto (resample de los eventos)
-- Barras y gráficos de pastel por región y tipo de vehículo
-- Selector de región para ver el desglose de vehículos pesados/ligeros
-
-## Ejecutar jobs Spark batch
-
-Los ejemplos de `analytics/jobs` siguen disponibles. Primero asegúrate de tener datos en HDFS (puedes utilizar los CSV de `BD_Proyecto` o reutilizar los archivos *gold* generados por el productor).
-
-```powershell
-# Limpieza a silver (ejemplo)
-docker compose exec spark-master \
-  spark-submit \
-    --master yarn \
-    --deploy-mode client \
-    /opt/spark-apps/data_cleaning.py \
-    --input-path hdfs:///data/gold/synthetic \
-    --output-path hdfs:///data/silver/traffic_clean
-
-# Consultas exploratorias
-docker compose exec spark-master \
-  spark-submit \
-    --master yarn \
-    --deploy-mode client \
-    /opt/spark-apps/exploratory_queries.py \
-    --input-path hdfs:///data/silver/traffic_clean
-```
-
-Ajusta `--input-path` según el origen deseado (raw, silver o gold).
-
-## Detener y limpiar
-
-```powershell
-# Detener servicios preservando datos de HDFS y el archivo local
-docker compose down
-
-# Detener y eliminar volúmenes HDFS (reinicio limpio)
-docker compose down -v
-```
-
-Los datos locales en `data/synthetic/traffic_stream.jsonl` se mantienen porque es un bind mount. Para limpiar ese archivo manualmente:
-
-```powershell
-Clear-Content data/synthetic/traffic_stream.jsonl
-```
-
-## Variables relevantes
-
-- `RATE_PER_MINUTE`: ritmo de generación del productor (registros/minuto)
-- `ROTATE_RECORDS`: cuántos registros antes de subir un nuevo archivo a HDFS
-- `HDFS_BASE_PATH`: ruta base donde aterrizan los archivos en HDFS (`/data/gold/synthetic` por defecto)
-- `STREAM_WINDOW_MINUTES`: ventana mostrada en el dashboard (15 min)
-- `STREAM_REFRESH_SECONDS`: intervalo fijo de refresco del dashboard (2 s)
-- `PROFILE_OVERRIDE_PATH`: ruta del perfil generado automáticamente (usado por productor y dashboard)
-- `PROFILE_STATUS_PATH`: archivo JSON con el estado del perfil activo que el dashboard muestra
-
-Puedes ajustar estos valores en `docker-compose.yml` y volver a levantar con `docker compose up -d --build`.
-
-## Troubleshooting
-
-- **Safe mode**: si ves `Name node is in safe mode`, espera unos segundos o ejecuta `docker compose logs namenode --tail 20` para confirmar que haya salido.
-- **Dashboard vacío**: confirma que el productor está escribiendo (`docker compose logs producer --tail 50`) y que existen archivos bajo `/data/gold/synthetic/dt=YYYYMMDD`.
-- **Puertos ocupados**: cierra servicios que usen 8501/9870/8088/8080 antes de levantar el stack.
-
----
-
-Este documento se mantiene alineado con la rama `reset-main`. Si cambias la arquitectura (por ejemplo, añades nuevos consumidores), actualiza este README y `docker-compose.yml` en conjunto.
+Con estos pasos puedes reconstruir el entorno, monitorear la ingestión y diagnosticar problemas sin depender de herramientas externas.

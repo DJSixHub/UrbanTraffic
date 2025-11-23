@@ -22,7 +22,12 @@ fi
 echo "[bootstrap] Waiting for safe mode to disengage..."
 hdfs dfsadmin -safemode wait
 
-echo "[bootstrap] Ensuring /data/gold/synthetic exists"
+echo "[bootstrap] Ensuring pipeline directories exist"
+hdfs dfs -mkdir -p /data/bronze/staging
+hdfs dfs -mkdir -p /data/silver/regions
+hdfs dfs -mkdir -p /data/gold/regions/groups
+hdfs dfs -mkdir -p /data/gold/management
+hdfs dfs -mkdir -p /data/checkpoints
 hdfs dfs -mkdir -p /data/gold/synthetic
 
 echo "[bootstrap] Setting ownership on /data"

@@ -1,7 +1,7 @@
 """Transform CSVs from 'Dataset Propuesto' into a single raw CSV consumable by the pipeline.
 
 This script does a lightweight column rename and type normalization so the
-analytics/producer jobs can read the CSV without additional mapping.
+profile generator in `scripts/generate_pipeline.py` puede leer el CSV sin mapeos adicionales.
 
 It expects the folder `Dataset Propuesto` at the repository root and will look
 for `dft_traffic_counts_raw_counts.csv` as the primary detailed counts file.
@@ -219,7 +219,7 @@ def main() -> None:
     # create output directory
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # write CSV with header expected by the Spark job; use index=False
+    # write CSV with header expected by the profile generator; use index=False
     df.to_csv(OUT_PATH, index=False, date_format="%Y-%m-%d")
     print(f"Wrote transformed CSV to {OUT_PATH}")
 
