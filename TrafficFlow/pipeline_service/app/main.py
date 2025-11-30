@@ -1,6 +1,7 @@
 """Kafka-driven processing pipeline writing silver and gold datasets to HDFS."""
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -86,6 +87,100 @@ class WebHDFSClient:
         self._handle_response(response)
 
 
+class DiskBacklog:
+    """File-backed queue used to persist events when HDFS is unavailable."""
+
+    def __init__(self, path: Path) -> None:
+        self.root = Path(path)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.file = self.root / "backlog.jsonl"
+
+    def has_events(self) -> bool:
+        if not self.file.exists():
+            return False
+        try:
+            return self.file.stat().st_size > 0
+        except OSError:
+            return False
+
+    def enqueue(self, events: Sequence[Dict[str, object]]) -> None:
+        if not events:
+            return
+        self.root.mkdir(parents=True, exist_ok=True)
+        with self.file.open("a", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            for event in events:
+                handle.write(json.dumps(event, separators=(",", ":")) + "\n")
+            handle.flush()
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def prepend(self, events: Sequence[Dict[str, object]]) -> None:
+        if not events:
+            return
+        self.root.mkdir(parents=True, exist_ok=True)
+        if self.file.exists():
+            try:
+                with self.file.open("r+", encoding="utf-8") as handle:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                    existing = handle.read()
+                    handle.seek(0)
+                    handle.truncate(0)
+                    for event in events:
+                        handle.write(json.dumps(event, separators=(",", ":")) + "\n")
+                    if existing:
+                        handle.write(existing)
+                    handle.flush()
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                return
+            except OSError:
+                pass
+        try:
+            with self.file.open("w", encoding="utf-8") as handle:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                for event in events:
+                    handle.write(json.dumps(event, separators=(",", ":")) + "\n")
+                handle.flush()
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+
+    def pop_batch(self, limit: int) -> List[Dict[str, object]]:
+        if not self.file.exists():
+            return []
+        lines: List[str] = []
+        try:
+            with self.file.open("r+", encoding="utf-8") as handle:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                lines = handle.readlines()
+                if not lines:
+                    handle.seek(0)
+                    handle.truncate(0)
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    return []
+                take_count = len(lines) if limit <= 0 else min(limit, len(lines))
+                remainder = lines[take_count:]
+                handle.seek(0)
+                handle.truncate(0)
+                if remainder:
+                    handle.writelines(remainder)
+                handle.flush()
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                selected = lines[:take_count]
+        except OSError:
+            return []
+
+        events: List[Dict[str, object]] = []
+        for line in selected:
+            if not line.strip():
+                continue
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+        return events
+
+
 @dataclass
 class Config:
     kafka_bootstrap_servers: Sequence[str]
@@ -99,6 +194,7 @@ class Config:
     flush_interval_seconds: int
     batch_size: int
     log_level: str
+    spool_path: Path
 
 
 def slugify(value: str) -> str:
@@ -139,6 +235,7 @@ def load_config() -> Config:
     flush_interval = int(os.getenv("FLUSH_INTERVAL_SECONDS", "20"))
     batch_size = int(os.getenv("BATCH_SIZE", "500"))
     log_level = os.getenv("LOG_LEVEL", "INFO")
+    spool_path = Path(os.getenv("PIPELINE_SPOOL_PATH", "/opt/pipeline/spool"))
 
     return Config(
         kafka_bootstrap_servers=parse_bootstrap_servers(kafka_bootstrap),
@@ -152,6 +249,7 @@ def load_config() -> Config:
         flush_interval_seconds=max(5, flush_interval),
         batch_size=max(1, batch_size),
         log_level=log_level,
+        spool_path=spool_path,
     )
 
 
@@ -347,12 +445,33 @@ def run_pipeline(config: Config) -> int:
         LOG.error("Failed to connect to Kafka: %s", exc)
         return 1
 
+    backlog = DiskBacklog(config.spool_path)
+
+    def flush_backlog(current_batch_id: int) -> int:
+        while backlog.has_events():
+            buffered_events = backlog.pop_batch(config.batch_size)
+            if not buffered_events:
+                break
+            try:
+                flush_batches(client, config, buffered_events, current_batch_id)
+            except (WebHDFSException, requests.RequestException) as exc:
+                LOG.error("Failed to persist backlog batch %s: %s", current_batch_id, exc)
+                backlog.prepend(buffered_events)
+                raise
+            current_batch_id += 1
+        return current_batch_id
+
     pending_events: List[Dict[str, object]] = []
     last_flush = time.time()
     batch_id = 0
 
     try:
         while not STOP_EVENT.is_set():
+            try:
+                batch_id = flush_backlog(batch_id)
+            except (WebHDFSException, requests.RequestException):
+                time.sleep(5)
+                continue
             try:
                 records = consumer.poll(timeout_ms=1000, max_records=config.batch_size)
             except KafkaError as exc:
@@ -379,9 +498,12 @@ def run_pipeline(config: Config) -> int:
             )
             if should_flush:
                 try:
+                    batch_id = flush_backlog(batch_id)
                     flush_batches(client, config, pending_events, batch_id)
                 except (WebHDFSException, requests.RequestException) as exc:
                     LOG.error("Failed to persist batch %s: %s", batch_id, exc)
+                    backlog.enqueue(list(pending_events))
+                    pending_events = []
                     time.sleep(5)
                     continue
                 pending_events = []
@@ -390,9 +512,11 @@ def run_pipeline(config: Config) -> int:
 
         if pending_events:
             try:
+                batch_id = flush_backlog(batch_id)
                 flush_batches(client, config, pending_events, batch_id)
             except (WebHDFSException, requests.RequestException) as exc:
                 LOG.error("Failed to persist final batch %s: %s", batch_id, exc)
+                backlog.enqueue(list(pending_events))
                 return 1
     finally:
         consumer.close()

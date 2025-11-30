@@ -46,25 +46,6 @@ BASE_COMPOSE = {
             "volumes": ["datanode:/hadoop/dfs/data", "./data:/data"],
             "networks": ["hadoop"],
         },
-        "kafka": {
-            "image": "bitnamilegacy/kafka:latest",
-            "container_name": "tf-kafka",
-            "environment": [
-                "KAFKA_CFG_NODE_ID=1",
-                "KAFKA_CFG_PROCESS_ROLES=broker,controller",
-                "KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@tf-kafka:9093",
-                "KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER",
-                "KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093",
-                "KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
-                "KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://tf-kafka:9092",
-                "KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true",
-                "KAFKA_CFG_LOG_DIRS=/bitnami/kafka/data",
-                "ALLOW_PLAINTEXT_LISTENER=yes",
-            ],
-            "ports": ["9092:9092"],
-            "volumes": ["kafka-data:/bitnami/kafka"],
-            "networks": ["hadoop"],
-        },
         "hdfs-bootstrap": {
             "image": "bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8",
             "container_name": "tf-hdfs-bootstrap",
@@ -77,8 +58,77 @@ BASE_COMPOSE = {
         },
     },
     "networks": {"hadoop": {"driver": "bridge"}},
-    "volumes": {"namenode": {}, "datanode": {}, "kafka-data": {}},
+    "volumes": {"namenode": {}, "datanode": {}},
 }
+
+
+KAFKA_CLUSTER_NODES: Tuple[Dict[str, object], ...] = (
+    {
+        "id": 1,
+        "service": "kafka-primary",
+        "container": "tf-kafka-primary",
+        "host": "tf-kafka-primary",
+        "port_mapping": "9092:9092",
+    },
+    {
+        "id": 2,
+        "service": "kafka-secondary",
+        "container": "tf-kafka-secondary",
+        "host": "tf-kafka-secondary",
+        "port_mapping": None,
+    },
+    {
+        "id": 3,
+        "service": "kafka-tertiary",
+        "container": "tf-kafka-tertiary",
+        "host": "tf-kafka-tertiary",
+        "port_mapping": None,
+    },
+)
+
+KAFKA_CONTROLLER_QUORUM = ",".join(
+    f"{node['id']}@{node['host']}:9093" for node in KAFKA_CLUSTER_NODES
+)
+
+KAFKA_CONTROLLER_BOOTSTRAP = ",".join(
+    f"{node['host']}:9093" for node in KAFKA_CLUSTER_NODES
+)
+
+KAFKA_BOOTSTRAP_TARGETS = ",".join(
+    f"{node['host']}:9092" for node in KAFKA_CLUSTER_NODES
+)
+
+
+def build_kafka_cluster_services() -> Dict[str, object]:
+    services: Dict[str, object] = {}
+    for node in KAFKA_CLUSTER_NODES:
+        environment = [
+            f"KAFKA_CFG_NODE_ID={node['id']}",
+            "KAFKA_CFG_PROCESS_ROLES=broker,controller",
+            f"KAFKA_CFG_CONTROLLER_QUORUM_VOTERS={KAFKA_CONTROLLER_QUORUM}",
+            f"KAFKA_CFG_CONTROLLER_QUORUM_BOOTSTRAP_SERVERS={KAFKA_CONTROLLER_BOOTSTRAP}",
+            "KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+            "KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT_INTERNAL",
+            "KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT",
+            "KAFKA_CFG_LISTENERS=PLAINTEXT_INTERNAL://:9092,CONTROLLER://:9093",
+            f"KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT_INTERNAL://{node['host']}:9092",
+            "KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true",
+            "KAFKA_CFG_LOG_DIRS=/bitnami/kafka/data",
+            "ALLOW_PLAINTEXT_LISTENER=yes",
+        ]
+        service: Dict[str, object] = {
+            "image": "bitnamilegacy/kafka:latest",
+            "container_name": node["container"],
+            "environment": environment,
+            "volumes": [f"kafka-data-{node['id']}:/bitnami/kafka"],
+            "networks": ["hadoop"],
+            "restart": "unless-stopped",
+        }
+        port_mapping = node.get("port_mapping")
+        if port_mapping:
+            service["ports"] = [port_mapping]
+        services[node["service"]] = service
+    return services
 
 
 @dataclass(frozen=True)
@@ -588,7 +638,11 @@ def extract_regions(profiles: Dict[str, object]) -> List[RegionEntry]:
     return regions
 
 
-def build_generator_service(region: RegionEntry) -> Dict[str, object]:
+def build_generator_service(
+    region: RegionEntry,
+    bootstrap_servers: str,
+    kafka_dependencies: Sequence[str],
+) -> Dict[str, object]:
     region_slug = slugify(region.region_name)
     return {
         "build": {"context": "./producer_service"},
@@ -602,9 +656,10 @@ def build_generator_service(region: RegionEntry) -> Dict[str, object]:
             "PRODUCER_ROAD_COUNT": str(max(region.road_count, 0)),
             "PRODUCER_SINK": "file,kafka",
             "OUTPUT_PATH": f"/opt/producer/output/{region_slug}.jsonl",
-            "KAFKA_BOOTSTRAP_SERVERS": "kafka:9092",
+            "KAFKA_BOOTSTRAP_SERVERS": bootstrap_servers,
             "KAFKA_TOPIC": f"traffic.raw.{region_slug}",
             "ROTATE_RECORDS": "500",
+            "PRODUCER_SPOOL_PATH": "/opt/producer/spool",
             "RATE_PER_MINUTE": str(
                 max(
                     int(math.ceil(max(region.baseline_rate, 0.1) * 60)),
@@ -615,9 +670,10 @@ def build_generator_service(region: RegionEntry) -> Dict[str, object]:
         "volumes": [
             "./data/generated_profiles:/opt/producer/generated:ro",
             "./data/synthetic:/opt/producer/output",
+            f"./data/producer_spool/{region_slug}:/opt/producer/spool",
         ],
         "depends_on": {
-            "kafka": {"condition": "service_started"},
+            dependency: {"condition": "service_started"} for dependency in kafka_dependencies
         },
         "mem_limit": "96m",
         "cpus": "0.15",
@@ -626,28 +682,38 @@ def build_generator_service(region: RegionEntry) -> Dict[str, object]:
     }
 
 
-def build_pipeline_service(regions: Sequence[RegionEntry]) -> Dict[str, object]:
+def build_pipeline_service(
+    regions: Sequence[RegionEntry],
+    bootstrap_servers: str,
+    status_filename: str,
+    container_name: str,
+    kafka_dependencies: Sequence[str],
+) -> Dict[str, object]:
     topics = ",".join(
         sorted({f"traffic.raw.{slugify(region.region_name)}" for region in regions})
     )
     return {
         "build": {"context": "./pipeline_service"},
-        "container_name": "tf-pipeline",
+        "container_name": container_name,
         "environment": {
-            "KAFKA_BOOTSTRAP_SERVERS": "kafka:9092",
+            "KAFKA_BOOTSTRAP_SERVERS": bootstrap_servers,
             "KAFKA_TOPICS": topics,
             "KAFKA_GROUP_ID": "trafficflow-pipeline",
             "SILVER_BASE_PATH": "/data/silver/regions",
             "GOLD_OUTPUT_PATH": "/data/gold/management/primary",
-            "STATUS_PATH": "/opt/pipeline/status/pipeline.json",
+            "STATUS_PATH": f"/opt/pipeline/status/{status_filename}",
             "WEBHDFS_URL": "http://namenode:9870",
             "HDFS_USER": "hdfs",
             "FLUSH_INTERVAL_SECONDS": "20",
             "BATCH_SIZE": "500",
+            "PIPELINE_SPOOL_PATH": "/opt/pipeline/spool",
         },
-        "volumes": ["./data/pipeline_status:/opt/pipeline/status"],
+        "volumes": [
+            "./data/pipeline_status:/opt/pipeline/status",
+            "./data/pipeline_spool:/opt/pipeline/spool",
+        ],
         "depends_on": {
-            "kafka": {"condition": "service_started"},
+            **{dependency: {"condition": "service_started"} for dependency in kafka_dependencies},
             "namenode": {"condition": "service_started"},
             "hdfs-bootstrap": {"condition": "service_completed_successfully"},
         },
@@ -658,7 +724,7 @@ def build_pipeline_service(regions: Sequence[RegionEntry]) -> Dict[str, object]:
     }
 
 
-def build_dashboard_service() -> Dict[str, object]:
+def build_dashboard_service(primary_pipeline_service: str) -> Dict[str, object]:
     return {
         "build": {"context": "./dashboard"},
         "container_name": "tf-dashboard",
@@ -673,7 +739,7 @@ def build_dashboard_service() -> Dict[str, object]:
             "PROFILE_OVERRIDE_PATH": "/opt/dashboard/generated_profiles/distributions.json",
         },
         "depends_on": {
-            "pipeline": {"condition": "service_started"},
+            primary_pipeline_service: {"condition": "service_started"},
             "namenode": {"condition": "service_started"},
             "hdfs-bootstrap": {"condition": "service_completed_successfully"},
         },
@@ -687,14 +753,32 @@ def build_dashboard_service() -> Dict[str, object]:
 def build_dynamic_services(
     regions: Sequence[RegionEntry],
 ) -> Dict[str, object]:
-    services: Dict[str, object] = {}
-
+    services: Dict[str, object] = build_kafka_cluster_services()
+    kafka_dependencies = [node["service"] for node in KAFKA_CLUSTER_NODES]
+    bootstrap_servers = KAFKA_BOOTSTRAP_TARGETS
     ordered_regions = sorted(regions, key=lambda item: (item.region_name or item.region_id))
     for region in ordered_regions:
-        services[f"generator-{slugify(region.region_id or region.region_name)}"] = build_generator_service(region)
+        services[f"generator-{slugify(region.region_id or region.region_name)}"] = build_generator_service(
+            region,
+            bootstrap_servers=bootstrap_servers,
+            kafka_dependencies=kafka_dependencies,
+        )
 
-    services["pipeline"] = build_pipeline_service(ordered_regions)
-    services["dashboard"] = build_dashboard_service()
+    services["pipeline-primary"] = build_pipeline_service(
+        ordered_regions,
+        bootstrap_servers=bootstrap_servers,
+        status_filename="pipeline-primary.json",
+        container_name="tf-pipeline-primary",
+        kafka_dependencies=kafka_dependencies,
+    )
+    services["pipeline-backup"] = build_pipeline_service(
+        ordered_regions,
+        bootstrap_servers=bootstrap_servers,
+        status_filename="pipeline-backup.json",
+        container_name="tf-pipeline-backup",
+        kafka_dependencies=kafka_dependencies,
+    )
+    services["dashboard"] = build_dashboard_service("pipeline-primary")
 
     return services
 
@@ -703,6 +787,9 @@ def build_full_compose(dynamic_services: Dict[str, object]) -> Dict[str, object]
     compose = deepcopy(BASE_COMPOSE)
     compose_services = compose.setdefault("services", {})
     compose_services.update(dynamic_services)
+    compose_volumes = compose.setdefault("volumes", {})
+    for node in KAFKA_CLUSTER_NODES:
+        compose_volumes.setdefault(f"kafka-data-{node['id']}", {})
     return compose
 
 
@@ -731,11 +818,20 @@ def parse_cli() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def ensure_runtime_directories() -> None:
-    for directory in (
+def ensure_runtime_directories(regions: Sequence[RegionEntry]) -> None:
+    base_directories = (
         PROJECT_ROOT / "data" / "pipeline_status",
-    ):
+        PROJECT_ROOT / "data" / "pipeline_spool",
+        PROJECT_ROOT / "data" / "producer_spool",
+        PROJECT_ROOT / "data" / "synthetic",
+    )
+    for directory in base_directories:
         directory.mkdir(parents=True, exist_ok=True)
+
+    producer_spool_root = PROJECT_ROOT / "data" / "producer_spool"
+    for region in regions:
+        slug = slugify(region.region_name)
+        (producer_spool_root / slug).mkdir(parents=True, exist_ok=True)
 
 
 def main() -> None:
@@ -760,7 +856,7 @@ def main() -> None:
             legacy_compose.unlink()
         except OSError:
             pass
-    ensure_runtime_directories()
+    ensure_runtime_directories(regions)
     print(f"Perfiles listos para {len(regions)} regiones")
     print(f"Compose generado en {args.compose}")
 

@@ -15,10 +15,10 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from kafka import KafkaProducer
-from kafka.errors import KafkaError
+from kafka.errors import KafkaError, KafkaTimeoutError, NoBrokersAvailable
 
 LOG = logging.getLogger("producer")
 STOP_REQUESTED = False
@@ -297,6 +297,11 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--output-path",
         default=os.environ.get("OUTPUT_PATH", "/opt/producer/output/traffic_stream.jsonl"),
         help="Destination file for newline-delimited JSON output",
+    )
+    parser.add_argument(
+        "--spool-path",
+        default=os.environ.get("PRODUCER_SPOOL_PATH", "/opt/producer/spool"),
+        help="Directory used to persist events when Kafka is unavailable",
     )
     parser.add_argument(
         "--sink",
@@ -694,27 +699,89 @@ class JsonlWriter:
         self._file.flush()
 
 
+class DiskSpool:
+    def __init__(self, root_path: str) -> None:
+        self.root = Path(root_path)
+        self.queue_file = self.root / "queue.jsonl"
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def append(self, payload: Dict[str, object]) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        with self.queue_file.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, separators=(",", ":")) + "\n")
+
+    def flush(self, sender: Callable[[Dict[str, object]], None], batch_size: int = 500) -> bool:
+        if not self.queue_file.exists():
+            return True
+        try:
+            lines = self.queue_file.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return False
+        if not lines:
+            try:
+                self.queue_file.unlink()
+            except FileNotFoundError:
+                pass
+            return True
+
+        processed = 0
+        remainder: List[str] = []
+        success = True
+        for index, line in enumerate(lines):
+            if batch_size and processed >= batch_size:
+                remainder.extend(lines[index:])
+                break
+            processed += 1
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            try:
+                sender(payload)
+            except Exception:
+                remainder.extend(lines[index:])
+                success = False
+                break
+
+        try:
+            if remainder:
+                with self.queue_file.open("w", encoding="utf-8") as handle:
+                    for entry in remainder:
+                        handle.write(entry + "\n")
+            else:
+                self.queue_file.unlink()
+        except OSError:
+            success = False
+        return success
+
+    def has_pending(self) -> bool:
+        return self.queue_file.exists() and self.queue_file.stat().st_size > 0
+
+
 class KafkaWriter:
-    def __init__(self, bootstrap_servers: str, topic: str) -> None:
+    def __init__(self, bootstrap_servers: str, topic: str, spool_path: str) -> None:
         self.bootstrap_servers = bootstrap_servers
         self.topic = topic
         self._producer: Optional[KafkaProducer] = None
+        self._bootstrap_targets = [server.strip() for server in bootstrap_servers.split(",") if server.strip()]
+        self._spool = DiskSpool(spool_path)
+        self._spool_batch = 500
 
     def __enter__(self) -> "KafkaWriter":
-        servers = [server.strip() for server in self.bootstrap_servers.split(",") if server.strip()]
-        if not servers:
-            raise RuntimeError("Kafka bootstrap servers not configured")
-        self._producer = KafkaProducer(
-            bootstrap_servers=servers,
-            value_serializer=lambda payload: json.dumps(payload, separators=(",", ":")).encode("utf-8"),
-            linger_ms=5,
-        )
-        LOG.info("Publishing synthetic stream to Kafka topic %s", self.topic)
+        self._ensure_producer()
+        if self._producer is not None:
+            self._drain_backlog()
+            LOG.info("Publishing synthetic stream to Kafka topic %s", self.topic)
+        else:
+            LOG.warning("Kafka no disponible; se usará cola local hasta recuperar la conexión")
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self._producer is not None:
             try:
+                self._drain_backlog()
                 self._producer.flush()
             finally:
                 self._producer.close()
@@ -722,8 +789,64 @@ class KafkaWriter:
 
     def write(self, payload: Dict[str, object]) -> None:
         if self._producer is None:
-            raise RuntimeError("Writer is not opened")
-        self._producer.send(self.topic, payload)
+            self._ensure_producer()
+        if self._producer is not None:
+            self._drain_backlog()
+            if self._try_send(payload):
+                return
+        self._spool.append(payload)
+
+    def _ensure_producer(self) -> None:
+        if self._producer is not None:
+            return
+        if not self._bootstrap_targets:
+            raise RuntimeError("Kafka bootstrap servers not configured")
+        try:
+            self._producer = KafkaProducer(
+                bootstrap_servers=self._bootstrap_targets,
+                value_serializer=lambda payload: json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+                linger_ms=5,
+                acks="all",
+                retries=0,
+                max_in_flight_requests_per_connection=1,
+            )
+        except (NoBrokersAvailable, KafkaTimeoutError, KafkaError) as exc:
+            LOG.warning("Kafka broker no disponible (%s); eventos serán almacenados localmente", exc)
+            self._producer = None
+
+    def _try_send(self, payload: Dict[str, object]) -> bool:
+        if self._producer is None:
+            return False
+        try:
+            future = self._producer.send(self.topic, payload)
+            future.get(timeout=10)
+            return True
+        except (KafkaTimeoutError, KafkaError) as exc:
+            LOG.warning("Fallo al publicar en Kafka; evento se envía a cola local (%s)", exc)
+            self._close_producer()
+            return False
+
+    def _close_producer(self) -> None:
+        if self._producer is not None:
+            try:
+                self._producer.close()
+            finally:
+                self._producer = None
+
+    def _drain_backlog(self) -> None:
+        if self._producer is None:
+            return
+        drained = self._spool.flush(self._ensure_delivery, batch_size=self._spool_batch)
+        if not drained and self._spool.has_pending():
+            LOG.debug("Persisten eventos pendientes en el spool local (%s)", self._spool.queue_file)
+
+    def _ensure_delivery(self, payload: Dict[str, object]) -> None:
+        if self._producer is None:
+            self._ensure_producer()
+            if self._producer is None:
+                raise KafkaError("Kafka producer not available")
+        future = self._producer.send(self.topic, payload)
+        future.get(timeout=10)
 
 
 class MultiWriter:
@@ -1002,6 +1125,7 @@ def build_writers(
     output_path: str,
     kafka_bootstrap_servers: str,
     kafka_topic: Optional[str],
+    spool_path: str,
 ) -> List[object]:
     writers: List[object] = []
     if "file" in sinks:
@@ -1009,7 +1133,7 @@ def build_writers(
     if "kafka" in sinks:
         if not kafka_topic:
             raise ValueError("Kafka topic must be provided when using the kafka sink")
-        writers.append(KafkaWriter(kafka_bootstrap_servers, kafka_topic))
+        writers.append(KafkaWriter(kafka_bootstrap_servers, kafka_topic, spool_path))
     return writers
 
 
@@ -1046,6 +1170,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             output_path=args.output_path,
             kafka_bootstrap_servers=args.kafka_bootstrap_servers,
             kafka_topic=kafka_topic,
+            spool_path=args.spool_path,
         )
     except (ValueError, KafkaError) as exc:
         LOG.error("Failed to configure output sinks: %s", exc)
