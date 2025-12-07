@@ -1,4 +1,3 @@
-"""Utility CLI to inspect or purge synthetic datasets stored in HDFS."""
 from __future__ import annotations
 
 import argparse
@@ -12,6 +11,7 @@ from .webhdfs_client import WebHDFSClient, WebHDFSException
 LOG = logging.getLogger("producer.manage")
 
 
+# Configura la salida de logging para la utilidad de gestión.
 def _configure_logging(level: str) -> None:
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
@@ -19,6 +19,7 @@ def _configure_logging(level: str) -> None:
     )
 
 
+# Construye el parser de comandos para las operaciones disponibles.
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -64,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# Presenta tamaños en formato legible para humanos.
 def _format_bytes(size: int) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
     value = float(size)
@@ -74,29 +76,31 @@ def _format_bytes(size: int) -> str:
     return f"{value:.2f} PB"
 
 
+# Lista archivos en HDFS y muestra metadatos según la opción elegida.
 def _print_list(client: WebHDFSClient, path: str, as_json: bool) -> None:
     statuses = client.list_status(path)
     if as_json:
-        print(json.dumps(statuses, indent=2))  # noqa: T201 (utility script output)
+        print(json.dumps(statuses, indent=2))
         return
     if not statuses:
-        print(f"(empty directory) {path}")  # noqa: T201
+        print(f"(empty directory) {path}")
         return
     header = f"Listing for {path}"
-    print(header)  # noqa: T201
-    print("-" * len(header))  # noqa: T201
+    print(header)
+    print("-" * len(header))
     for status in statuses:
         kind = status.get("type", "?").upper()
         size = _format_bytes(int(status.get("length", 0)))
         name = status.get("pathSuffix", "")
         modification = status.get("modificationTime")
-        print(f"{kind:>4}  {size:>12}  {modification}  {name}")  # noqa: T201
+        print(f"{kind:>4}  {size:>12}  {modification}  {name}")
 
 
+# Elimina rutas en HDFS controlando borrados recursivos.
 def _delete_path(client: WebHDFSClient, path: str, recursive: bool) -> int:
     try:
         success = client.delete(path, recursive=recursive)
-    except WebHDFSException as exc:  # pragma: no cover - propagated to CLI output
+    except WebHDFSException as exc:
         LOG.error("Deletion failed: %s", exc)
         return 1
     if success:
@@ -106,6 +110,7 @@ def _delete_path(client: WebHDFSClient, path: str, recursive: bool) -> int:
     return 1
 
 
+# Ejecuta la CLI despachando a los subcomandos disponibles.
 def main(argv: Any = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)

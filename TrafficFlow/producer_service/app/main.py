@@ -1,4 +1,3 @@
-"""Per-region synthetic traffic generator emitting vehicle events one by one."""
 from __future__ import annotations
 
 import argparse
@@ -57,6 +56,7 @@ HEAVY_VEHICLE_CATEGORIES = {
 }
 
 
+# Construye un perfil horario básico con medias y desviaciones uniformes.
 def _default_hourly_profile(mean: float, std: float, observations: int) -> Dict[str, Dict[str, float]]:
     return {
         str(hour): {
@@ -167,6 +167,7 @@ DEFAULT_PROFILES = {
 
 
 @dataclass
+# Describe métricas resumidas por hora para una carretera.
 class RoadHourProfile:
     mean_per_minute: float
     std_per_minute: float
@@ -174,6 +175,7 @@ class RoadHourProfile:
 
 
 @dataclass
+# Modela los atributos completos necesarios para simular una carretera.
 class RoadProfile:
     id: str
     name: str
@@ -201,6 +203,7 @@ class RoadProfile:
 
 
 @dataclass
+# Contiene parámetros agregados para simular una región completa.
 class RegionProfile:
     id: str
     name: str
@@ -216,9 +219,11 @@ class RegionProfile:
 
 
 @dataclass
+# Facilita el acceso a perfiles de carreteras y regiones.
 class Profiles:
     data: Dict[str, object]
 
+    # Devuelve la colección de carreteras disponibles en el perfil.
     def list_roads(self) -> List[Dict[str, object]]:
         index = self.data.get("road_index")
         if isinstance(index, list):
@@ -241,6 +246,7 @@ class Profiles:
             return result
         return []
 
+    # Recupera la definición de una carretera específica.
     def get_road(self, road_id: str) -> Optional[Dict[str, object]]:
         roads = self.data.get("roads")
         if isinstance(roads, dict):
@@ -248,6 +254,7 @@ class Profiles:
             return payload if isinstance(payload, dict) else None
         return None
 
+    # Devuelve la lista de regiones incluidas en el perfil.
     def list_regions(self) -> List[Dict[str, object]]:
         index = self.data.get("region_index")
         if isinstance(index, list):
@@ -268,6 +275,7 @@ class Profiles:
             return result
         return []
 
+    # Recupera los detalles de una región concreta.
     def get_region(self, region_id: str) -> Optional[Dict[str, object]]:
         regions = self.data.get("regions")
         if isinstance(regions, dict):
@@ -276,6 +284,7 @@ class Profiles:
         return None
 
 
+# Configura y parsea los argumentos CLI del generador.
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Per-road synthetic traffic producer")
     parser.add_argument(
@@ -370,6 +379,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
+# Determina los destinos de salida efectivos según CLI y entorno.
 def resolve_sink_targets(cli_values: Optional[List[str]], env_value: Optional[str]) -> List[str]:
     sources: List[str] = []
     if cli_values:
@@ -397,6 +407,7 @@ def resolve_sink_targets(cli_values: Optional[List[str]], env_value: Optional[st
     return resolved
 
 
+# Carga perfiles desde disco y aplica overrides opcionales.
 def load_profiles(path: str, override_path: Optional[str] = None) -> Tuple[Profiles, str, Optional[Path]]:
     base = deepcopy(DEFAULT_PROFILES)
     resolved_label = "defaults"
@@ -430,6 +441,7 @@ def load_profiles(path: str, override_path: Optional[str] = None) -> Tuple[Profi
     return Profiles(base), resolved_label, resolved_path
 
 
+# Registra en disco la procedencia del perfil resuelto.
 def write_profile_status(
     status_path: Optional[str],
     source_label: str,
@@ -461,6 +473,7 @@ def write_profile_status(
         LOG.warning("Failed to persist profile status to %s (%s)", status_path, exc)
 
 
+# Convierte valores en flotantes aplicando un valor por defecto.
 def _safe_float(value: object, default: float) -> float:
     try:
         result = float(value)
@@ -471,6 +484,7 @@ def _safe_float(value: object, default: float) -> float:
     return result
 
 
+# Reescala un diccionario de pesos para que sumen uno.
 def _normalize_distribution(raw: Dict[str, object]) -> Dict[str, float]:
     values: Dict[str, float] = {}
     for key, value in raw.items():
@@ -483,6 +497,7 @@ def _normalize_distribution(raw: Dict[str, object]) -> Dict[str, float]:
     return {key: weight / total for key, weight in values.items()}
 
 
+# Selecciona una clave ponderada usando un generador aleatorio dado.
 def _weighted_choice(mapping: Dict[str, float], rng: random.Random, fallback: str) -> str:
     if not mapping:
         return fallback
@@ -500,6 +515,7 @@ def _weighted_choice(mapping: Dict[str, float], rng: random.Random, fallback: st
     return items[-1][0]
 
 
+# Normaliza cadenas para generar identificadores seguros.
 def _slugify(value: str) -> str:
     text = value.strip().lower()
     text = re.sub(r"[^a-z0-9]+", "-", text)
@@ -507,6 +523,7 @@ def _slugify(value: str) -> str:
     return text or "value"
 
 
+# Transforma datos crudos en perfiles horarios tipados.
 def _build_hourly_profile(raw: Dict[str, object], baseline: float) -> Dict[int, RoadHourProfile]:
     profile: Dict[int, RoadHourProfile] = {}
     for key, value in raw.items():
@@ -526,6 +543,7 @@ def _build_hourly_profile(raw: Dict[str, object], baseline: float) -> Dict[int, 
     return profile
 
 
+# Construye la estructura completa de una carretera a partir de JSON.
 def build_road_profile(road_id: str, raw: Dict[str, object]) -> RoadProfile:
     location = raw.get("location") if isinstance(raw.get("location"), dict) else {}
     link_length = raw.get("link_length") if isinstance(raw.get("link_length"), dict) else {}
@@ -567,6 +585,7 @@ def build_road_profile(road_id: str, raw: Dict[str, object]) -> RoadProfile:
     )
 
 
+# Ensambla los metadatos de una región y sus carreteras.
 def build_region_profile(region_id: str, raw: Dict[str, object]) -> RegionProfile:
     baseline = _safe_float(raw.get("baseline_rate_per_minute"), 1.0)
     hourly_raw = raw.get("hourly_profile") if isinstance(raw.get("hourly_profile"), dict) else {}
@@ -619,6 +638,7 @@ def build_region_profile(region_id: str, raw: Dict[str, object]) -> RegionProfil
     )
 
 
+# Calcula el índice de instancia a utilizar según el entorno.
 def resolve_instance_index(explicit: Optional[int]) -> Optional[int]:
     if explicit is not None:
         return max(explicit, 0)
@@ -645,6 +665,7 @@ def resolve_instance_index(explicit: Optional[int]) -> Optional[int]:
     return None
 
 
+# Elige la región a simular considerando filtros y balances.
 def select_region_profile(
     profiles: Profiles,
     region_id: Optional[str],
@@ -675,23 +696,28 @@ def select_region_profile(
     return build_region_profile(selected_id, raw)
 
 
+# Gestiona la escritura continua en archivos JSONL.
 class JsonlWriter:
+    # Configura la ruta del archivo y el manejador.
     def __init__(self, path: str) -> None:
         self._path = Path(path)
         self._file: Optional[object] = None
 
+    # Abre el archivo y habilita el contexto de escritura.
     def __enter__(self) -> "JsonlWriter":
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._file = self._path.open("a", encoding="utf-8")
         LOG.info("Writing synthetic stream to %s", self._path)
         return self
 
+    # Asegura el cierre del archivo cuando termina el contexto.
     def __exit__(self, exc_type, exc, tb) -> None:
         if self._file:
             self._file.flush()
             self._file.close()
             self._file = None
 
+    # Escribe el evento serializado en el archivo abierto.
     def write(self, payload: Dict[str, object]) -> None:
         if self._file is None:
             raise RuntimeError("Writer is not opened")
@@ -699,17 +725,21 @@ class JsonlWriter:
         self._file.flush()
 
 
+# Administra una cola en disco para reintentos de envío.
 class DiskSpool:
+    # Inicializa la carpeta de spool y los archivos auxiliares.
     def __init__(self, root_path: str) -> None:
         self.root = Path(root_path)
         self.queue_file = self.root / "queue.jsonl"
         self.root.mkdir(parents=True, exist_ok=True)
 
+    # Añade un evento a la cola persistente.
     def append(self, payload: Dict[str, object]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         with self.queue_file.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, separators=(",", ":")) + "\n")
 
+    # Reprocesa los eventos pendientes intentando reenviarlos.
     def flush(self, sender: Callable[[Dict[str, object]], None], batch_size: int = 500) -> bool:
         if not self.queue_file.exists():
             return True
@@ -756,11 +786,14 @@ class DiskSpool:
             success = False
         return success
 
+    # Indica si existen eventos pendientes en la cola.
     def has_pending(self) -> bool:
         return self.queue_file.exists() and self.queue_file.stat().st_size > 0
 
 
+# Produce eventos hacia Kafka gestionando reconexiones y spool.
 class KafkaWriter:
+    # Configura parámetros de Kafka y la cola local.
     def __init__(self, bootstrap_servers: str, topic: str, spool_path: str) -> None:
         self.bootstrap_servers = bootstrap_servers
         self.topic = topic
@@ -769,6 +802,7 @@ class KafkaWriter:
         self._spool = DiskSpool(spool_path)
         self._spool_batch = 500
 
+    # Abre el productor y drena la cola antes de publicar.
     def __enter__(self) -> "KafkaWriter":
         self._ensure_producer()
         if self._producer is not None:
@@ -778,6 +812,7 @@ class KafkaWriter:
             LOG.warning("Kafka no disponible; se usará cola local hasta recuperar la conexión")
         return self
 
+    # Libera recursos de Kafka asegurando flush final.
     def __exit__(self, exc_type, exc, tb) -> None:
         if self._producer is not None:
             try:
@@ -787,6 +822,7 @@ class KafkaWriter:
                 self._producer.close()
                 self._producer = None
 
+    # Envía el evento a Kafka o lo redirige al spool si falla.
     def write(self, payload: Dict[str, object]) -> None:
         if self._producer is None:
             self._ensure_producer()
@@ -796,6 +832,7 @@ class KafkaWriter:
                 return
         self._spool.append(payload)
 
+    # Crea el productor de Kafka si aún no existe.
     def _ensure_producer(self) -> None:
         if self._producer is not None:
             return
@@ -814,6 +851,7 @@ class KafkaWriter:
             LOG.warning("Kafka broker no disponible (%s); eventos serán almacenados localmente", exc)
             self._producer = None
 
+    # Intenta publicar un evento en Kafka retornando el resultado.
     def _try_send(self, payload: Dict[str, object]) -> bool:
         if self._producer is None:
             return False
@@ -826,6 +864,7 @@ class KafkaWriter:
             self._close_producer()
             return False
 
+    # Cierra el productor activo y libera recursos.
     def _close_producer(self) -> None:
         if self._producer is not None:
             try:
@@ -833,6 +872,7 @@ class KafkaWriter:
             finally:
                 self._producer = None
 
+    # Reenvía los eventos pendientes del spool a Kafka.
     def _drain_backlog(self) -> None:
         if self._producer is None:
             return
@@ -840,6 +880,7 @@ class KafkaWriter:
         if not drained and self._spool.has_pending():
             LOG.debug("Persisten eventos pendientes en el spool local (%s)", self._spool.queue_file)
 
+    # Garantiza que un evento termine en Kafka o arroje error.
     def _ensure_delivery(self, payload: Dict[str, object]) -> None:
         if self._producer is None:
             self._ensure_producer()
@@ -849,11 +890,14 @@ class KafkaWriter:
         future.get(timeout=10)
 
 
+# Coordina múltiples writers para publicar en paralelo.
 class MultiWriter:
+    # Recibe la lista de writers a administrar.
     def __init__(self, writers: Sequence[object]) -> None:
         self._writers = list(writers)
         self._active: List[object] = []
 
+    # Entra en el contexto de todos los writers disponibles.
     def __enter__(self) -> "MultiWriter":
         self._active = []
         for writer in self._writers:
@@ -861,16 +905,19 @@ class MultiWriter:
             self._active.append(entered)
         return self
 
+    # Sale de los contextos abiertos y limpia el estado activo.
     def __exit__(self, exc_type, exc, tb) -> None:
         for writer in reversed(self._writers):
             if hasattr(writer, "__exit__"):
                 writer.__exit__(exc_type, exc, tb)
         self._active = []
 
+    # Propaga la escritura del evento a cada writer activo.
     def write(self, payload: Dict[str, object]) -> None:
         for writer in self._active:
             writer.write(payload)
 
+    # Reinicia los writers para renovar archivos o conexiones.
     def rotate(self) -> None:
         if not self._writers:
             return
@@ -878,11 +925,14 @@ class MultiWriter:
         self.__enter__()
 
 
+# Genera eventos individuales basados en un perfil de carretera.
 class RoadRecordGenerator:
+    # Recibe el perfil de carretera y la fuente de aleatoriedad.
     def __init__(self, road: RoadProfile, rng: random.Random) -> None:
         self.road = road
         self.rng = rng
 
+    # Obtiene el perfil horario correspondiente al instante actual.
     def _hour_profile(self, hour: int) -> RoadHourProfile:
         return self.road.hourly_profile.get(hour, RoadHourProfile(
             mean_per_minute=self.road.baseline_rate_per_minute,
@@ -890,6 +940,7 @@ class RoadRecordGenerator:
             observations=0,
         ))
 
+    # Calcula una tasa de generación respetando la distribución horaria.
     def _sample_rate(self, hour_profile: RoadHourProfile) -> float:
         mean = max(hour_profile.mean_per_minute, 0.01)
         std = hour_profile.std_per_minute
@@ -898,12 +949,15 @@ class RoadRecordGenerator:
         rate = self.rng.gauss(mean, std)
         return max(rate, 0.01)
 
+    # Elige una dirección de viaje acorde al perfil.
     def _pick_direction(self) -> str:
         return _weighted_choice(self.road.direction_distribution, self.rng, "Unknown")
 
+    # Selecciona la categoría de vehículo a generar.
     def _pick_vehicle_category(self) -> str:
         return _weighted_choice(self.road.vehicle_distribution, self.rng, "car_and_taxi")
 
+    # Muestra coordenadas geográficas de forma consistente.
     def _sample_location(self) -> Tuple[float, float, float, float]:
         latitude = self.rng.gauss(self.road.latitude_mean, self.road.latitude_std)
         longitude = self.rng.gauss(self.road.longitude_mean, self.road.longitude_std)
@@ -911,11 +965,13 @@ class RoadRecordGenerator:
         northing = self.rng.gauss(self.road.northing_mean, self.road.northing_std)
         return latitude, longitude, easting, northing
 
+    # Determina la longitud del tramo en kilómetros y millas.
     def _sample_link_length(self) -> Tuple[float, float]:
         km = max(self.rng.gauss(self.road.link_length_km_mean, self.road.link_length_km_std), 0.05)
         miles = max(self.rng.gauss(self.road.link_length_miles_mean, self.road.link_length_miles_std), 0.03)
         return km, miles
 
+    # Construye un evento completo y calcula la tasa resultante.
     def generate_record(
         self,
         now: datetime,
@@ -941,12 +997,14 @@ class RoadRecordGenerator:
         )
         return record, rate
 
+    # Genera un evento con marca temporal actual y su periodo objetivo.
     def sample(self) -> Tuple[Dict[str, object], float, float]:
         now = datetime.now(timezone.utc)
         record, rate = self.generate_record(now)
         delay = max(60.0 / rate, 0.05)
         return record, delay, rate
 
+    # Arma el diccionario de salida con campos normalizados.
     def _build_record(
         self,
         now: datetime,
@@ -1003,7 +1061,9 @@ class RoadRecordGenerator:
         return record
 
 
+# Genera eventos escogiendo carreteras dentro de una región.
 class RegionRecordGenerator:
+    # Configura el generador regional y crea subgeneradores por carretera.
     def __init__(self, region: RegionProfile, rng: random.Random) -> None:
         if not region.roads:
             raise ValueError(f"Region '{region.id}' does not contain any road profiles")
@@ -1014,6 +1074,7 @@ class RegionRecordGenerator:
             for road_id, road_profile in region.roads.items()
         }
 
+    # Obtiene el perfil horario agregado de la región.
     def _hour_profile(self, hour: int) -> RoadHourProfile:
         profile = self.region.hourly_profile.get(hour)
         if profile is not None:
@@ -1025,6 +1086,7 @@ class RegionRecordGenerator:
             observations=0,
         )
 
+    # Estima la tasa regional para la hora solicitada.
     def _sample_rate(self, hour_profile: RoadHourProfile) -> float:
         mean = max(hour_profile.mean_per_minute, 0.1)
         std = hour_profile.std_per_minute
@@ -1033,6 +1095,7 @@ class RegionRecordGenerator:
         rate = self.rng.gauss(mean, std)
         return max(rate, 0.1)
 
+    # Calcula los pesos relativos de cada carretera de la región.
     def _road_weights(self, hour: int) -> Dict[str, float]:
         weights: Dict[str, float] = {}
         for road_id, road_profile in self.region.roads.items():
@@ -1045,6 +1108,7 @@ class RegionRecordGenerator:
             return {road_id: 1.0 for road_id in self.region.roads.keys()}
         return weights
 
+    # Genera un evento regional y devuelve la cadencia objetivo.
     def sample(self) -> Tuple[Dict[str, object], float, float]:
         now = datetime.now(timezone.utc)
         hour_profile = self._hour_profile(now.hour)
@@ -1069,7 +1133,9 @@ class RegionRecordGenerator:
         return record, delay, region_rate
 
 
+# Controla el bucle principal de generación y escritura.
 class ProducerRunner:
+    # Recibe los componentes principales del productor y la rotación.
     def __init__(
         self,
         generator: RegionRecordGenerator,
@@ -1080,6 +1146,7 @@ class ProducerRunner:
         self.writer = writer
         self.rotation_size = rotation_size if rotation_size and rotation_size > 0 else None
 
+    # Ejecuta la generación continua respetando límites y previsualizaciones.
     def run(self, max_records: Optional[int], preview_records: int) -> None:
         produced = 0
         preview_remaining = max(preview_records, 0)
@@ -1106,6 +1173,7 @@ class ProducerRunner:
         LOG.info("Producer stopped after emitting %s records", produced)
 
 
+# Configura el logger global del productor.
 def configure_logging(level: str) -> None:
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
@@ -1113,6 +1181,7 @@ def configure_logging(level: str) -> None:
     )
 
 
+# Marca la solicitud de parada al recibir señales del sistema.
 def _handle_stop(signum: int, frame: object) -> None:
     del signum, frame
     global STOP_REQUESTED
@@ -1120,6 +1189,7 @@ def _handle_stop(signum: int, frame: object) -> None:
     LOG.info("Termination signal received; stopping producer loop")
 
 
+# Construye la lista de writers en función de los sinks elegidos.
 def build_writers(
     sinks: Sequence[str],
     output_path: str,
@@ -1137,6 +1207,7 @@ def build_writers(
     return writers
 
 
+# Punto de entrada del generador regional.
 def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parse_args(argv)
     configure_logging(args.log_level)

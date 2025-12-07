@@ -1,4 +1,3 @@
-"""Core Kafka pipeline implementation for the traffic flow service."""
 from __future__ import annotations
 
 import json
@@ -41,14 +40,15 @@ VEHICLE_FIELDS: Sequence[Tuple[str, str]] = (
     ("heavy_goods_vehicle_6_articulated_axles_count", "hgv_6_articulated_axles"),
 )
 
-
+# Representa fallos reportados por el API de WebHDFS.
 class WebHDFSException(RuntimeError):
-    """Raised when the WebHDFS API reports an error."""
+    pass
 
 
+# Gestiona operaciones básicas contra WebHDFS.
 class WebHDFSClient:
-    """Minimal WebHDFS helper supporting directory creation and file writes."""
 
+    # Inicializa el cliente con la configuración base para WebHDFS.
     def __init__(
         self,
         base_url: str,
@@ -61,6 +61,7 @@ class WebHDFSClient:
         self.timeout = timeout
         self.session = session or requests.Session()
 
+    # Construye la URL completa para una operación de WebHDFS.
     def _build_url(self, path: str, op: str, **params: object) -> str:
         from urllib.parse import quote, urlencode
 
@@ -70,9 +71,11 @@ class WebHDFSClient:
         query.update({key: value for key, value in params.items() if value is not None})
         return f"{self.base_url}/webhdfs/v1/{encoded_path}?{urlencode(query)}"
 
+    # Ejecuta una petición HTTP genérica usando la sesión configurada.
     def _request(self, method: str, url: str, **kwargs: object) -> requests.Response:
         return self.session.request(method, url, timeout=self.timeout, **kwargs)
 
+    # Valida la respuesta HTTP y eleva errores de WebHDFS cuando corresponda.
     def _handle(self, response: requests.Response) -> Dict[str, object]:
         if response.status_code < 400:
             try:
@@ -87,6 +90,7 @@ class WebHDFSClient:
             message = response.text or response.reason
         raise WebHDFSException(message or f"WebHDFS error {response.status_code}")
 
+    # Garantiza que el directorio indicado exista en HDFS.
     def mkdirs(self, path: str) -> None:
         url = self._build_url(path, "MKDIRS")
         response = self._request("PUT", url)
@@ -94,6 +98,7 @@ class WebHDFSClient:
         if not payload.get("boolean", False):
             raise WebHDFSException(f"Failed to ensure directory exists at {path}")
 
+    # Escribe un archivo en HDFS manejando los redireccionamientos del API.
     def write_file(self, path: str, data: str, overwrite: bool = True) -> None:
         payload = data.encode("utf-8")
         create_url = self._build_url(path, "CREATE", overwrite=str(overwrite).lower())
@@ -136,26 +141,22 @@ class PendingRecord:
     offset: int
 
 
+# Normaliza texto en un slug con guiones y minúsculas.
 def slugify(value: str) -> str:
     lowered = value.lower()
     tokens = re.findall(r"[a-z0-9]+", lowered)
     return "-".join(tokens) or "unknown"
 
 
+# Convierte valores posiblemente nulos en enteros seguros.
 def _safe_int(value: object) -> int:
     try:
-        return int(value)  # type: ignore[arg-type]
+        return int(value)
     except (TypeError, ValueError):
         return 0
 
 
-def _safe_float(value: object) -> float:
-    try:
-        return float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return 0.0
-
-
+# Interpreta marcas de tiempo heterogéneas y las devuelve en UTC.
 def parse_timestamp(value: Optional[str]) -> datetime:
     if isinstance(value, str) and value:
         candidate = value.replace("Z", "+00:00")
@@ -170,12 +171,13 @@ def parse_timestamp(value: Optional[str]) -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Serializa una secuencia de eventos como JSONL.
 def _serialize_records(records: Iterable[Dict[str, object]]) -> str:
     return "\n".join(json.dumps(record, separators=(",", ":")) for record in records) + "\n"
 
 
+# Calcula agregados por región y autoridad para la capa gold.
 def aggregate_events(events: Sequence[Dict[str, object]], batch_id: int) -> List[Dict[str, object]]:
-    # Aggregate per-region and per-authority metrics for downstream gold tables.
     region_rollups: Dict[str, Dict[str, object]] = {}
     authority_rollups: Dict[Tuple[str, str], Dict[str, object]] = {}
 
@@ -255,7 +257,7 @@ def aggregate_events(events: Sequence[Dict[str, object]], batch_id: int) -> List
 
     return results
 
-
+# Actualiza el archivo local de estado del pipeline.
 def write_status(config: Config, batch_id: int, total_events: int, gold_rows: int) -> None:
     payload = {
         "batch_id": batch_id,
@@ -270,7 +272,7 @@ def write_status(config: Config, batch_id: int, total_events: int, gold_rows: in
     except OSError as exc:
         LOG.warning("Failed to update status file %s: %s", config.status_path, exc)
 
-
+# Persiste la capa silver y gold en HDFS para el conjunto de eventos.
 def flush_batches(
     client: WebHDFSClient,
     config: Config,
@@ -308,7 +310,7 @@ def flush_batches(
     write_status(config, batch_id, len(events), len(gold_records))
     return len(gold_records)
 
-
+# Procesa un lote y confirma offsets si la escritura fue exitosa.
 def _flush_and_commit(
     consumer: KafkaConsumer,
     client: WebHDFSClient,
@@ -344,7 +346,7 @@ def _flush_and_commit(
         return False
     return True
 
-
+# Orquesta el consumo continuo desde Kafka y el envío a HDFS.
 def run_pipeline(config: Config) -> int:
     configure_logging(config.log_level)
     STOP_EVENT.clear()
@@ -423,21 +425,21 @@ def run_pipeline(config: Config) -> int:
 
     return 0
 
-
+# Obtiene la lista de tópicos desde la variable de entorno.
 def parse_topics(raw: str) -> List[str]:
     topics = [topic.strip() for topic in raw.split(",") if topic.strip()]
     if not topics:
         raise SystemExit("KAFKA_TOPICS must include at least one topic")
     return topics
 
-
+# Obtiene los endpoints de Kafka desde la variable de entorno.
 def parse_bootstrap_servers(raw: str) -> List[str]:
     servers = [server.strip() for server in raw.split(",") if server.strip()]
     if not servers:
         raise SystemExit("KAFKA_BOOTSTRAP_SERVERS must include at least one endpoint")
     return servers
 
-
+# Lee enteros desde el entorno aplicando un valor por defecto.
 def _parse_int_env(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None:
@@ -447,7 +449,7 @@ def _parse_int_env(name: str, default: int) -> int:
     except ValueError as exc:
         raise SystemExit(f"{name} must be an integer") from exc
 
-
+# Construye la configuración del servicio a partir del entorno.
 def load_config() -> Config:
     kafka_bootstrap = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
     kafka_topics_raw = os.getenv("KAFKA_TOPICS", "")
@@ -478,14 +480,14 @@ def load_config() -> Config:
         consumer_timeout_ms=consumer_timeout,
     )
 
-
+# Configura la salida de logging del servicio.
 def configure_logging(level: str) -> None:
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     )
 
-
+# Maneja señales del sistema para detener el servicio ordenadamente.
 def _handle_signal(signum: int, frame: object) -> None:
     del signum, frame
     STOP_EVENT.set()

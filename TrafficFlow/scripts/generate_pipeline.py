@@ -1,4 +1,3 @@
-"""Generate per-road producer profiles and a full docker compose stack."""
 from __future__ import annotations
 
 import argparse
@@ -93,12 +92,13 @@ KAFKA_BOOTSTRAP_TARGETS = ",".join(
 
 ALLOWED_CLUSTER_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
-
+# Genera un identificador estable para el clúster Kafka.
 def generate_cluster_id() -> str:
     raw = uuid.uuid4().bytes
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
+# Recupera el identificador del clúster o crea uno nuevo.
 def load_or_create_cluster_id(path: Path) -> str:
     if path.exists():
         try:
@@ -117,6 +117,7 @@ def load_or_create_cluster_id(path: Path) -> str:
     return cluster_id
 
 
+# Construye la definición de servicio para un datanode de HDFS.
 def build_hdfs_datanode_service(hostname: str, volume_name: str, expose_port: bool) -> Dict[str, object]:
     environment = [
         "CORE_CONF_fs_defaultFS=hdfs://namenode:8020",
@@ -138,6 +139,7 @@ def build_hdfs_datanode_service(hostname: str, volume_name: str, expose_port: bo
     return service
 
 
+# Genera la configuración docker-compose de los brokers Kafka.
 def build_kafka_cluster_services(cluster_id: str) -> Dict[str, object]:
     services: Dict[str, object] = {}
     for node in KAFKA_CLUSTER_NODES:
@@ -178,13 +180,14 @@ def build_kafka_cluster_services(cluster_id: str) -> Dict[str, object]:
 
 
 @dataclass(frozen=True)
+# Resume los atributos clave de una región en los perfiles.
 class RegionEntry:
     region_id: str
     region_name: str
     baseline_rate: float
     road_count: int
 
-
+# Normaliza texto en un identificador con guiones.
 def slugify(value: str) -> str:
     value = value.strip().lower()
     cleaned = []
@@ -197,6 +200,7 @@ def slugify(value: str) -> str:
     return slug or "unknown"
 
 
+# Carga el perfil de fallback desde disco y valida su contenido.
 def load_fallback_profile(path: Path) -> Dict[str, object]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -221,6 +225,7 @@ VEHICLE_CATEGORY_COLUMNS: Tuple[Tuple[str, str], ...] = (
 )
 
 
+# Construye perfiles a partir del dataset usando pandas cuando está disponible.
 def build_profiles_via_pandas(
     dataset_path: Path,
     min_observations: int,
@@ -235,7 +240,7 @@ def build_profiles_via_pandas(
         df = pd.read_csv(dataset_path, low_memory=False)
     except FileNotFoundError:
         return None
-    except Exception as exc:  # noqa: BLE001 - log and fallback
+    except Exception as exc:
         print(f"[generate_pipeline] No se pudo leer el dataset con pandas ({exc}); usando fallback")
         return None
 
@@ -264,6 +269,7 @@ def build_profiles_via_pandas(
         return None
     df["hour_int"] = df["hour_int"].astype(int)
 
+    # Calcula la desviación estándar poblacional evitando valores NaN.
     def _std_pop(series: "pd.Series") -> float:
         value = float(series.std(ddof=0))
         return 0.0 if math.isnan(value) else value
@@ -434,7 +440,6 @@ def build_profiles_via_pandas(
 
     road_index.sort(key=lambda item: item.get("road_name") or "")
 
-    # Preparar agregaciones por región
     df["region_name"] = df["region_name"].fillna("Unknown Region").astype(str).str.strip()
     df.loc[df["region_name"] == "", "region_name"] = "Unknown Region"
     df["local_authority_name"] = (
@@ -443,7 +448,6 @@ def build_profiles_via_pandas(
     df.loc[df["local_authority_name"] == "", "local_authority_name"] = "Unknown Authority"
     df["travel_direction"] = df["travel_direction"].fillna("Unknown").astype(str).str.strip()
 
-    # Mapear carreteras por región para incrustarlas en cada perfil regional
     roads_by_region: Dict[str, Dict[str, Dict[str, object]]] = defaultdict(dict)
     road_lookup: Dict[Tuple[str, str], str] = {}
     for road_id, payload in roads_payload.items():
@@ -452,7 +456,6 @@ def build_profiles_via_pandas(
         roads_by_region[region][road_id] = payload
         road_lookup[(region, road_name)] = road_id
 
-    # Totales por región para distribuciones
     vehicle_totals_df = (
         df.groupby("region_name")[vehicle_columns].sum().fillna(0) if vehicle_columns else pd.DataFrame()
     )
@@ -623,6 +626,7 @@ def build_profiles_via_pandas(
     return profiles
 
 
+# Garantiza que exista un archivo de perfiles listo para usar.
 def ensure_profiles(
     dataset_path: Path,
     output_path: Path,
@@ -653,6 +657,7 @@ def ensure_profiles(
     return profiles
 
 
+# Produce la lista de regiones disponibles a partir del perfil.
 def extract_regions(profiles: Dict[str, object]) -> List[RegionEntry]:
     index = profiles.get("region_index")
     if not isinstance(index, list):
@@ -684,6 +689,7 @@ def extract_regions(profiles: Dict[str, object]) -> List[RegionEntry]:
     return regions
 
 
+# Crea la entrada docker-compose para un generador regional.
 def build_generator_service(
     region: RegionEntry,
     bootstrap_servers: str,
@@ -728,6 +734,7 @@ def build_generator_service(
     }
 
 
+# Define la configuración de un servicio de pipeline redundante.
 def build_pipeline_service(
     regions: Sequence[RegionEntry],
     bootstrap_servers: str,
@@ -768,6 +775,7 @@ def build_pipeline_service(
     }
 
 
+# Genera la definición del dashboard Streamlit.
 def build_dashboard_service(primary_pipeline_service: str) -> Dict[str, object]:
     return {
         "build": {"context": "./dashboard"},
@@ -794,6 +802,7 @@ def build_dashboard_service(primary_pipeline_service: str) -> Dict[str, object]:
     }
 
 
+# Ensambla todos los servicios dependientes de las regiones.
 def build_dynamic_services(
     regions: Sequence[RegionEntry],
     cluster_id: str,
@@ -828,6 +837,7 @@ def build_dynamic_services(
     return services
 
 
+# Combina servicios base y dinámicos para producir el compose final.
 def build_full_compose(dynamic_services: Dict[str, object]) -> Dict[str, object]:
     compose = deepcopy(BASE_COMPOSE)
     compose_services = compose.setdefault("services", {})
@@ -850,10 +860,12 @@ def build_full_compose(dynamic_services: Dict[str, object]) -> Dict[str, object]
     return compose
 
 
+# Serializa el compose generado a disco.
 def write_compose(compose: Dict[str, object], output_path: Path) -> None:
     output_path.write_text(json.dumps(compose, indent=2), encoding="utf-8")
 
 
+# Define y parsea los argumentos disponibles del script.
 def parse_cli() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate profiles and compose stack for TrafficFlow")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET, help="Input CSV dataset path")
@@ -875,6 +887,7 @@ def parse_cli() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Crea directorios de spool y estado necesarios para cada región.
 def ensure_runtime_directories(regions: Sequence[RegionEntry]) -> None:
     base_directories = (
         PROJECT_ROOT / "data" / "pipeline_status",
@@ -890,6 +903,7 @@ def ensure_runtime_directories(regions: Sequence[RegionEntry]) -> None:
         (producer_spool_root / slug).mkdir(parents=True, exist_ok=True)
 
 
+# Punto de entrada del generador de perfiles y compose.
 def main() -> None:
     args = parse_cli()
     profiles = ensure_profiles(
