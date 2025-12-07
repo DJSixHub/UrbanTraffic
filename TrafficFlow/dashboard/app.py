@@ -11,11 +11,13 @@ import pandas as pd
 import requests
 import streamlit as st
 from requests import RequestException
-from urllib.parse import quote
+from requests.exceptions import ChunkedEncodingError
+from urllib.parse import quote, urlparse, urlunparse
 import altair as alt
 import plotly.express as px
 
 WEBHDFS_URL = os.getenv("WEBHDFS_URL", "http://localhost:9870").rstrip("/")
+WEBHDFS_DATANODE_URL = os.getenv("WEBHDFS_DATANODE_URL", "").rstrip("/")
 HDFS_BASE_PATH = os.getenv("HDFS_BASE_PATH", "/data/gold/management/primary").rstrip("/") or "/"
 HDFS_USER = os.getenv("HDFS_USER", "hdfs")
 REFRESH_INTERVAL_SECONDS = float(os.getenv("STREAM_REFRESH_SECONDS", "2"))
@@ -66,10 +68,42 @@ VEHICLE_LABELS = {
 alt.data_transformers.disable_max_rows()
 
 
-def _webhdfs_get(path: str, operation: str, timeout: float = 10.0) -> requests.Response:
+def _webhdfs_get(
+    path: str,
+    operation: str,
+    timeout: float = 10.0,
+    *,
+    allow_redirects: bool = True,
+) -> requests.Response:
     params = {"op": operation, "user.name": HDFS_USER}
     url = f"{WEBHDFS_URL}/webhdfs/v1{quote(path, safe='/')}"
-    return requests.get(url, params=params, timeout=timeout)
+    return requests.get(url, params=params, timeout=timeout, allow_redirects=allow_redirects)
+
+
+def _rewrite_redirect_location(location: str) -> str:
+    if not location or not WEBHDFS_DATANODE_URL:
+        return location
+    try:
+        override = urlparse(WEBHDFS_DATANODE_URL)
+        target = urlparse(location)
+    except ValueError:
+        return location
+
+    override_netloc = override.netloc or override.path
+    if not override_netloc:
+        return location
+
+    scheme = override.scheme or target.scheme or "http"
+    return urlunparse(
+        (
+            scheme,
+            override_netloc,
+            target.path,
+            target.params,
+            target.query,
+            target.fragment,
+        )
+    )
 
 
 def list_status(path: str) -> List[Dict[str, object]]:
@@ -85,17 +119,71 @@ def list_status(path: str) -> List[Dict[str, object]]:
     return statuses if isinstance(statuses, list) else []
 
 
-def read_hdfs_file(path: str) -> List[Dict[str, object]]:
+def _extract_redirect_location(response: requests.Response) -> Optional[str]:
+    location = response.headers.get("Location")
+    if location:
+        return location
     try:
-        resp = _webhdfs_get(path, "OPEN", timeout=30.0)
+        payload = response.json()
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if isinstance(payload, dict):
+        raw_location = payload.get("Location")
+        return raw_location if isinstance(raw_location, str) else None
+    return None
+
+
+def _download_redirect_body(path: str, location: str, follow_url: str) -> str:
+    headers: Dict[str, str] = {}
+    try:
+        parsed = urlparse(location)
+    except ValueError:
+        parsed = None
+    if parsed and parsed.netloc:
+        headers["Host"] = parsed.netloc
+
+    try:
+        with requests.get(follow_url, timeout=30.0, headers=headers, stream=True) as data_resp:
+            data_resp.raise_for_status()
+            chunks: List[bytes] = []
+            try:
+                for chunk in data_resp.iter_content(chunk_size=65536):
+                    if chunk:
+                        chunks.append(chunk)
+            except ChunkedEncodingError as exc:
+                partial = getattr(exc, "partial", b"")
+                if partial:
+                    chunks.append(partial)
+                else:
+                    raise RuntimeError(f"OPEN redirect failed for {path}: {exc}") from exc
+    except RequestException as exc:
+        raise RuntimeError(f"OPEN redirect failed for {path}: {exc}") from exc
+
+    body_bytes = b"".join(chunks)
+    return body_bytes.decode("utf-8", errors="ignore")
+
+
+def read_hdfs_file(path: str) -> List[Dict[str, object]]:
+    manual_redirect = bool(WEBHDFS_DATANODE_URL)
+    try:
+        resp = _webhdfs_get(path, "OPEN", timeout=30.0, allow_redirects=not manual_redirect)
         if resp.status_code == 404:
             return []
-        resp.raise_for_status()
+
+        if resp.is_redirect and manual_redirect:
+            location = _extract_redirect_location(resp)
+            if not location:
+                raise RuntimeError(f"OPEN redirect missing location for {path}")
+            follow_url = _rewrite_redirect_location(location)
+            body_text = _download_redirect_body(path, location, follow_url)
+        else:
+            resp.raise_for_status()
+            body_text = resp.text
     except RequestException as exc:
         raise RuntimeError(f"OPEN failed for {path}: {exc}") from exc
 
     records: List[Dict[str, object]] = []
-    for raw_line in resp.text.splitlines():
+    for raw_line in body_text.splitlines():
         raw_line = raw_line.strip()
         if not raw_line:
             continue
@@ -300,7 +388,7 @@ def render_pie_chart(data: pd.Series, title: str) -> None:
         title=title,
     )
     fig.update_traces(hovertemplate="%{label}: %{value:,} vehículos (%{percent:.1%})")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def render_line_chart(
@@ -327,7 +415,7 @@ def render_line_chart(
         )
         .properties(title=title, height=320)
     )
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
 
 def render_bar_chart(
@@ -356,7 +444,7 @@ def render_bar_chart(
         )
         .properties(title=title, height=320)
     )
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
 
 def aggregate_vehicle_columns(df: pd.DataFrame, columns: Sequence[str]) -> pd.Series:

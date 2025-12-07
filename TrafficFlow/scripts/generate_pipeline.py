@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import math
 import os
 import sys
+import uuid
 from datetime import datetime, timezone
 from collections import defaultdict
 from copy import deepcopy
@@ -21,6 +23,7 @@ DEFAULT_DATASET = PROJECT_ROOT / "data" / "raw" / "clean_data.csv"
 DEFAULT_PROFILES = PROJECT_ROOT / "data" / "generated_profiles" / "distributions.json"
 DEFAULT_FALLBACK = PROJECT_ROOT / "data" / "generated_profiles" / "fallback_distributions.json"
 DEFAULT_COMPOSE = PROJECT_ROOT / "docker-compose.yaml"
+KAFKA_CLUSTER_ID_FILE = PROJECT_ROOT / "data" / "kafka_cluster_id"
 
 BASE_COMPOSE = {
     "services": {
@@ -30,20 +33,10 @@ BASE_COMPOSE = {
             "environment": [
                 "CLUSTER_NAME=trafficflow",
                 "CORE_CONF_fs_defaultFS=hdfs://namenode:8020",
+                "HDFS_CONF_dfs_replication=3",
             ],
             "ports": ["9870:9870", "9000:9000"],
             "volumes": ["namenode:/hadoop/dfs/name", "./data:/data"],
-            "networks": ["hadoop"],
-        },
-        "datanode": {
-            "image": "bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8",
-            "container_name": "tf-datanode",
-            "depends_on": ["namenode"],
-            "environment": [
-                "CORE_CONF_fs_defaultFS=hdfs://namenode:8020",
-                "SERVICE_PRECONDITION=namenode:9870",
-            ],
-            "volumes": ["datanode:/hadoop/dfs/data", "./data:/data"],
             "networks": ["hadoop"],
         },
         "hdfs-bootstrap": {
@@ -58,7 +51,7 @@ BASE_COMPOSE = {
         },
     },
     "networks": {"hadoop": {"driver": "bridge"}},
-    "volumes": {"namenode": {}, "datanode": {}},
+    "volumes": {"namenode": {}},
 }
 
 
@@ -98,8 +91,54 @@ KAFKA_BOOTSTRAP_TARGETS = ",".join(
     f"{node['host']}:9092" for node in KAFKA_CLUSTER_NODES
 )
 
+ALLOWED_CLUSTER_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
-def build_kafka_cluster_services() -> Dict[str, object]:
+
+def generate_cluster_id() -> str:
+    raw = uuid.uuid4().bytes
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def load_or_create_cluster_id(path: Path) -> str:
+    if path.exists():
+        try:
+            current = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            current = ""
+        if current and set(current).issubset(ALLOWED_CLUSTER_CHARS) and 16 <= len(current) <= 22:
+            return current
+
+    cluster_id = generate_cluster_id()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(cluster_id, encoding="utf-8")
+    except OSError:
+        pass
+    return cluster_id
+
+
+def build_hdfs_datanode_service(hostname: str, volume_name: str, expose_port: bool) -> Dict[str, object]:
+    environment = [
+        "CORE_CONF_fs_defaultFS=hdfs://namenode:8020",
+        "SERVICE_PRECONDITION=namenode:9870",
+        f"HDFS_CONF_dfs_datanode_hostname={hostname}",
+        f"HDFS_CONF_dfs_datanode_http_address={hostname}:9864",
+        "HDFS_CONF_dfs_replication=3",
+    ]
+    service: Dict[str, object] = {
+        "image": "bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8",
+        "container_name": hostname,
+        "depends_on": ["namenode"],
+        "environment": environment,
+        "volumes": [f"{volume_name}:/hadoop/dfs/data", "./data:/data"],
+        "networks": ["hadoop"],
+    }
+    if expose_port:
+        service["ports"] = ["9864:9864"]
+    return service
+
+
+def build_kafka_cluster_services(cluster_id: str) -> Dict[str, object]:
     services: Dict[str, object] = {}
     for node in KAFKA_CLUSTER_NODES:
         environment = [
@@ -114,6 +153,13 @@ def build_kafka_cluster_services() -> Dict[str, object]:
             f"KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT_INTERNAL://{node['host']}:9092",
             "KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true",
             "KAFKA_CFG_LOG_DIRS=/bitnami/kafka/data",
+            "KAFKA_CFG_DEFAULT_REPLICATION_FACTOR=3",
+            "KAFKA_CFG_NUM_PARTITIONS=3",
+            "KAFKA_CFG_MIN_INSYNC_REPLICAS=2",
+            "KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR=3",
+            "KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
+            "KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR=2",
+            f"KAFKA_KRAFT_CLUSTER_ID={cluster_id}",
             "ALLOW_PLAINTEXT_LISTENER=yes",
         ]
         service: Dict[str, object] = {
@@ -706,11 +752,9 @@ def build_pipeline_service(
             "HDFS_USER": "hdfs",
             "FLUSH_INTERVAL_SECONDS": "20",
             "BATCH_SIZE": "500",
-            "PIPELINE_SPOOL_PATH": "/opt/pipeline/spool",
         },
         "volumes": [
             "./data/pipeline_status:/opt/pipeline/status",
-            "./data/pipeline_spool:/opt/pipeline/spool",
         ],
         "depends_on": {
             **{dependency: {"condition": "service_started"} for dependency in kafka_dependencies},
@@ -752,8 +796,9 @@ def build_dashboard_service(primary_pipeline_service: str) -> Dict[str, object]:
 
 def build_dynamic_services(
     regions: Sequence[RegionEntry],
+    cluster_id: str,
 ) -> Dict[str, object]:
-    services: Dict[str, object] = build_kafka_cluster_services()
+    services: Dict[str, object] = build_kafka_cluster_services(cluster_id)
     kafka_dependencies = [node["service"] for node in KAFKA_CLUSTER_NODES]
     bootstrap_servers = KAFKA_BOOTSTRAP_TARGETS
     ordered_regions = sorted(regions, key=lambda item: (item.region_name or item.region_id))
@@ -786,8 +831,20 @@ def build_dynamic_services(
 def build_full_compose(dynamic_services: Dict[str, object]) -> Dict[str, object]:
     compose = deepcopy(BASE_COMPOSE)
     compose_services = compose.setdefault("services", {})
-    compose_services.update(dynamic_services)
     compose_volumes = compose.setdefault("volumes", {})
+    datanode_specs = [
+        ("datanode", "tf-datanode", "datanode", True),
+        ("datanode-2", "tf-datanode-2", "datanode-2", False),
+        ("datanode-3", "tf-datanode-3", "datanode-3", False),
+    ]
+    for service_name, hostname, volume_name, expose_port in datanode_specs:
+        compose_services[service_name] = build_hdfs_datanode_service(
+            hostname=hostname,
+            volume_name=volume_name,
+            expose_port=expose_port,
+        )
+        compose_volumes.setdefault(volume_name, {})
+    compose_services.update(dynamic_services)
     for node in KAFKA_CLUSTER_NODES:
         compose_volumes.setdefault(f"kafka-data-{node['id']}", {})
     return compose
@@ -821,7 +878,6 @@ def parse_cli() -> argparse.Namespace:
 def ensure_runtime_directories(regions: Sequence[RegionEntry]) -> None:
     base_directories = (
         PROJECT_ROOT / "data" / "pipeline_status",
-        PROJECT_ROOT / "data" / "pipeline_spool",
         PROJECT_ROOT / "data" / "producer_spool",
         PROJECT_ROOT / "data" / "synthetic",
     )
@@ -847,7 +903,8 @@ def main() -> None:
     regions = extract_regions(profiles)
     if not regions:
         raise SystemExit("No se encontraron regiones válidas en el perfil generado")
-    dynamic_services = build_dynamic_services(regions)
+    cluster_id = load_or_create_cluster_id(KAFKA_CLUSTER_ID_FILE)
+    dynamic_services = build_dynamic_services(regions, cluster_id)
     compose = build_full_compose(dynamic_services)
     write_compose(compose, args.compose)
     legacy_compose = PROJECT_ROOT / "docker-compose.generated.yml"
