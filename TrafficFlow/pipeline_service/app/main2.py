@@ -20,6 +20,7 @@ from kafka.coordinator.assignors.roundrobin import RoundRobinPartitionAssignor
 from kafka.errors import KafkaError
 from kafka.structs import OffsetAndMetadata, TopicPartition
 
+from .profile_updater import RuntimeProfileUpdater
 
 LOG = logging.getLogger("pipeline")
 STOP_EVENT = threading.Event()
@@ -118,6 +119,7 @@ class WebHDFSClient:
 
 
 @dataclass
+# Agrupa parámetros centrales para ejecutar el pipeline.
 class Config:
     kafka_bootstrap_servers: Sequence[str]
     kafka_topics: Sequence[str]
@@ -131,9 +133,13 @@ class Config:
     batch_size: int
     log_level: str
     consumer_timeout_ms: int = DEFAULT_CONSUMER_TIMEOUT_MS
+    profile_output_path: Optional[Path] = None
+    profile_state_path: Optional[Path] = None
+    profile_min_observations: int = 1
 
 
 @dataclass
+# Representa un mensaje pendiente junto con su offset.
 class PendingRecord:
     event: Dict[str, object]
     topic: str
@@ -154,6 +160,14 @@ def _safe_int(value: object) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+# Convierte valores posiblemente nulos en flotantes seguros.
+def _safe_float(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 # Interpreta marcas de tiempo heterogéneas y las devuelve en UTC.
@@ -178,15 +192,46 @@ def _serialize_records(records: Iterable[Dict[str, object]]) -> str:
 
 # Calcula agregados por región y autoridad para la capa gold.
 def aggregate_events(events: Sequence[Dict[str, object]], batch_id: int) -> List[Dict[str, object]]:
-    region_rollups: Dict[str, Dict[str, object]] = {}
-    authority_rollups: Dict[Tuple[str, str], Dict[str, object]] = {}
+    region_rollups: Dict[Tuple[str, datetime], Dict[str, object]] = {}
+    authority_rollups: Dict[Tuple[str, str, datetime], Dict[str, object]] = {}
+    road_rollups: Dict[Tuple[str, str, str, datetime], Dict[str, object]] = {}
+    region_lengths: Dict[Tuple[str, datetime], Dict[str, float]] = defaultdict(dict)
+    authority_lengths: Dict[Tuple[str, str, datetime], Dict[str, float]] = defaultdict(dict)
 
     for event in events:
         region_name = str(event.get("region_name") or "Unknown")
         authority_name = str(event.get("local_authority_name") or "Unknown")
+        road_id = str(event.get("road_id") or "").strip()
+        road_name = str(event.get("road_name") or "Unknown road").strip()
+        road_type = str(event.get("road_type") or "Unknown").strip()
+
+        start_junction_raw = event.get("start_junction_road_name") or event.get("start_junction_name") or event.get("start_junction")
+        end_junction_raw = event.get("end_junction_road_name") or event.get("end_junction_name") or event.get("end_junction")
+        start_junction = str(start_junction_raw or "").strip() or f"{road_name} (inicio)"
+        end_junction = str(end_junction_raw or "").strip() or f"{road_name} (fin)"
+        if start_junction == end_junction:
+            end_junction = f"{end_junction} (fin)"
+
+        road_key = road_id or f"{road_name}:{start_junction}->{end_junction}"
+
+        timestamp_value = (
+            event.get("event_timestamp")
+            or event.get("timestamp")
+            or event.get("observation_time")
+        )
+        timestamp = parse_timestamp(timestamp_value)
+        minute_key = timestamp.replace(second=0, microsecond=0)
+        region_key = (region_name, minute_key)
+        authority_key = (region_name, authority_name, minute_key)
+
+        link_length_km = _safe_float(event.get("link_length_kilometers"))
+        if link_length_km <= 0.0:
+            link_length_km = _safe_float(event.get("link_length_miles")) * 1.60934
+        if link_length_km < 0.0:
+            link_length_km = 0.0
 
         region_bucket = region_rollups.setdefault(
-            region_name,
+            region_key,
             {
                 "region_name": region_name,
                 "total_vehicles": 0,
@@ -197,7 +242,7 @@ def aggregate_events(events: Sequence[Dict[str, object]], batch_id: int) -> List
         )
 
         authority_bucket = authority_rollups.setdefault(
-            (region_name, authority_name),
+            authority_key,
             {
                 "region_name": region_name,
                 "local_authority_name": authority_name,
@@ -207,6 +252,46 @@ def aggregate_events(events: Sequence[Dict[str, object]], batch_id: int) -> List
                 **{target: 0 for _, target in VEHICLE_FIELDS},
             },
         )
+
+        road_bucket: Optional[Dict[str, object]] = None
+        if road_key:
+            road_bucket = road_rollups.setdefault(
+                (region_name, authority_name, road_key, minute_key),
+                {
+                    "region_name": region_name,
+                    "local_authority_name": authority_name,
+                    "road_id": road_id or road_key,
+                    "road_name": road_name,
+                    "road_type": road_type,
+                    "start_junction_name": start_junction,
+                    "end_junction_name": end_junction,
+                    "total_vehicles": 0,
+                    "event_count": 0,
+                    "heavy_vehicles": 0,
+                    "link_length_kilometers": 0.0,
+                    **{target: 0 for _, target in VEHICLE_FIELDS},
+                },
+            )
+            current_length = _safe_float(road_bucket.get("link_length_kilometers"))
+            if link_length_km > 0.0 and link_length_km > current_length:
+                road_bucket["link_length_kilometers"] = link_length_km
+            if road_bucket.get("start_junction_name") in ("", "Unknown start", None):
+                road_bucket["start_junction_name"] = start_junction
+            if road_bucket.get("end_junction_name") in ("", "Unknown end", None):
+                road_bucket["end_junction_name"] = end_junction
+            if not road_bucket.get("road_name") or road_bucket.get("road_name") == "Unknown road":
+                road_bucket["road_name"] = road_name
+            road_bucket.setdefault("start_junction_name", start_junction)
+            road_bucket.setdefault("end_junction_name", end_junction)
+
+        if road_key and link_length_km > 0.0:
+            region_lengths[region_key][road_key] = max(
+                link_length_km, region_lengths[region_key].get(road_key, 0.0)
+            )
+            authority_lengths[authority_key][road_key] = max(
+                link_length_km,
+                authority_lengths[authority_key].get(road_key, 0.0),
+            )
 
         vehicles = _safe_int(event.get("all_motor_vehicle_count"))
         heavy_value = event.get("all_heavy_goods_vehicle_count")
@@ -219,37 +304,78 @@ def aggregate_events(events: Sequence[Dict[str, object]], batch_id: int) -> List
         else:
             heavy_sum = _safe_int(heavy_value)
 
-        for bucket in (region_bucket, authority_bucket):
+        target_buckets: List[Dict[str, object]] = [region_bucket, authority_bucket]
+        if road_bucket is not None:
+            target_buckets.append(road_bucket)
+
+        for bucket in target_buckets:
             bucket["total_vehicles"] += vehicles
             bucket["event_count"] += 1
             bucket["heavy_vehicles"] += heavy_sum
             for source, target in VEHICLE_FIELDS:
                 bucket[target] += _safe_int(event.get(source))
 
-    batch_timestamp = int(time.time())
     results: List[Dict[str, object]] = []
 
-    for entry in region_rollups.values():
+    for (region_name, minute_key), entry in region_rollups.items():
         event_count = max(1, int(entry["event_count"]))
         entry["avg_vehicles"] = entry["total_vehicles"] / float(event_count)
+        length_map = region_lengths.get((region_name, minute_key), {})
+        total_length = sum(value for value in length_map.values() if value > 0.0)
+        entry["total_link_length_km"] = total_length
+        entry["vehicles_per_km"] = (
+            entry["total_vehicles"] / total_length if total_length > 0.0 else 0.0
+        )
         entry.update(
             {
                 "batch_id": batch_id,
-                "batch_timestamp": batch_timestamp,
+                "batch_timestamp": int(minute_key.timestamp()),
+                "event_timestamp": minute_key.isoformat(),
                 "role": "primary",
                 "writer_failover_active": False,
             }
         )
         results.append(entry)
 
-    for entry in authority_rollups.values():
+    for (region_name, authority_name, minute_key), entry in authority_rollups.items():
         event_count = max(1, int(entry["event_count"]))
         entry["avg_vehicles"] = entry["total_vehicles"] / float(event_count)
+        length_map = authority_lengths.get(
+            (region_name, authority_name, minute_key),
+            {},
+        )
+        total_length = sum(value for value in length_map.values() if value > 0.0)
+        entry["total_link_length_km"] = total_length
+        entry["vehicles_per_km"] = (
+            entry["total_vehicles"] / total_length if total_length > 0.0 else 0.0
+        )
         entry.update(
             {
                 "batch_id": batch_id,
-                "batch_timestamp": batch_timestamp,
+                "batch_timestamp": int(minute_key.timestamp()),
+                "event_timestamp": minute_key.isoformat(),
                 "role": "authority",
+                "writer_failover_active": False,
+            }
+        )
+        results.append(entry)
+
+    for (region_name, authority_name, road_key, minute_key), entry in road_rollups.items():
+        event_count = max(1, int(entry["event_count"]))
+        entry["avg_vehicles"] = entry["total_vehicles"] / float(event_count)
+        length_km = _safe_float(entry.get("link_length_kilometers"))
+        entry["total_link_length_km"] = length_km
+        entry["vehicles_per_km"] = (
+            entry["total_vehicles"] / length_km if length_km > 0.0 else 0.0
+        )
+        entry.setdefault("start_junction_name", f"{entry.get('road_name', 'Unknown road')} (inicio)")
+        entry.setdefault("end_junction_name", f"{entry.get('road_name', 'Unknown road')} (fin)")
+        entry.update(
+            {
+                "batch_id": batch_id,
+                "batch_timestamp": int(minute_key.timestamp()),
+                "event_timestamp": minute_key.isoformat(),
+                "role": "road",
                 "writer_failover_active": False,
             }
         )
@@ -317,6 +443,7 @@ def _flush_and_commit(
     config: Config,
     records: Sequence[PendingRecord],
     batch_id: int,
+    profile_updater: Optional[RuntimeProfileUpdater] = None,
 ) -> bool:
     if not records:
         return True
@@ -328,13 +455,19 @@ def _flush_and_commit(
         LOG.error("Failed to persist batch %s: %s", batch_id, exc)
         return False
 
+    if profile_updater is not None:
+        try:
+            profile_updater.update(events)
+        except Exception as exc:  # noqa: BLE001 - queremos registrar errores inesperados
+            LOG.error("Failed to update runtime profiles for batch %s: %s", batch_id, exc)
+
     commit_map: Dict[TopicPartition, OffsetAndMetadata] = {}
     for record in records:
         partition = TopicPartition(record.topic, record.partition)
         next_offset = record.offset + 1
         current = commit_map.get(partition)
         if current is None or next_offset > current.offset:
-            commit_map[partition] = OffsetAndMetadata(next_offset, None)
+            commit_map[partition] = OffsetAndMetadata(next_offset, None, -1)
 
     if not commit_map:
         return True
@@ -355,6 +488,14 @@ def run_pipeline(config: Config) -> int:
         signal.signal(sig, _handle_signal)
 
     client = WebHDFSClient(config.webhdfs_url, config.hdfs_user)
+    profile_updater: Optional[RuntimeProfileUpdater] = None
+    if config.profile_output_path:
+        state_path = config.profile_state_path or config.profile_output_path.with_suffix(".state.json")
+        profile_updater = RuntimeProfileUpdater(
+            config.profile_output_path,
+            state_path,
+            min_observations=config.profile_min_observations,
+        )
 
     try:
         consumer = KafkaConsumer(
@@ -383,7 +524,14 @@ def run_pipeline(config: Config) -> int:
                 or (now - last_flush) >= config.flush_interval_seconds
             )
             if should_flush:
-                if _flush_and_commit(consumer, client, config, pending_records, batch_id):
+                if _flush_and_commit(
+                    consumer,
+                    client,
+                    config,
+                    pending_records,
+                    batch_id,
+                    profile_updater,
+                ):
                     pending_records.clear()
                     batch_id += 1
                     last_flush = now
@@ -418,7 +566,14 @@ def run_pipeline(config: Config) -> int:
                     )
 
         if pending_records:
-            if not _flush_and_commit(consumer, client, config, pending_records, batch_id):
+            if not _flush_and_commit(
+                consumer,
+                client,
+                config,
+                pending_records,
+                batch_id,
+                profile_updater,
+            ):
                 return 1
     finally:
         consumer.close()
@@ -464,6 +619,11 @@ def load_config() -> Config:
     batch_size = max(1, _parse_int_env("BATCH_SIZE", 500))
     consumer_timeout = max(100, _parse_int_env("KAFKA_CONSUMER_TIMEOUT_MS", DEFAULT_CONSUMER_TIMEOUT_MS))
     log_level = os.getenv("LOG_LEVEL", "INFO")
+    profile_output_raw = os.getenv("PROFILE_OUTPUT_PATH")
+    profile_state_raw = os.getenv("PROFILE_STATE_PATH")
+    profile_min_obs = max(1, _parse_int_env("PROFILE_MIN_OBSERVATIONS", 3))
+    profile_output_path = Path(profile_output_raw) if profile_output_raw else None
+    profile_state_path = Path(profile_state_raw) if profile_state_raw else None
 
     return Config(
         kafka_bootstrap_servers=parse_bootstrap_servers(kafka_bootstrap),
@@ -478,6 +638,9 @@ def load_config() -> Config:
         batch_size=batch_size,
         log_level=log_level,
         consumer_timeout_ms=consumer_timeout,
+        profile_output_path=profile_output_path,
+        profile_state_path=profile_state_path,
+        profile_min_observations=profile_min_obs,
     )
 
 # Configura la salida de logging del servicio.

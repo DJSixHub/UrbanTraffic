@@ -12,7 +12,7 @@ from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -200,6 +200,97 @@ def slugify(value: str) -> str:
     return slug or "unknown"
 
 
+# Genera perfiles reducidos por región para minimizar el consumo de memoria de los productores.
+def write_region_profile_slices(profiles: Dict[str, object], target_root: Path) -> None:
+    region_index = profiles.get("region_index")
+    regions_payload = profiles.get("regions")
+    if not isinstance(region_index, list) or not isinstance(regions_payload, dict):
+        return
+
+    roads_global = profiles.get("roads") if isinstance(profiles.get("roads"), dict) else {}
+    road_index_entries = profiles.get("road_index") if isinstance(profiles.get("road_index"), list) else []
+    road_index_lookup: Dict[str, Dict[str, object]] = {}
+    for entry in road_index_entries:
+        if not isinstance(entry, dict):
+            continue
+        road_id = str(entry.get("id") or "").strip()
+        if road_id:
+            road_index_lookup[road_id] = entry
+
+    target_root.mkdir(parents=True, exist_ok=True)
+    for existing in target_root.glob("*.json"):
+        try:
+            existing.unlink()
+        except OSError:
+            pass
+
+    used_slugs: Dict[str, int] = {}
+    base_meta = profiles.get("meta") if isinstance(profiles.get("meta"), dict) else {}
+
+    for entry in region_index:
+        if not isinstance(entry, dict):
+            continue
+        region_id = str(entry.get("id") or "").strip()
+        region_name = str(entry.get("region_name") or region_id or "Unknown Region").strip()
+        if not region_id:
+            continue
+        region_payload = regions_payload.get(region_id)
+        if not isinstance(region_payload, dict):
+            continue
+
+        region_roads_raw = region_payload.get("roads") if isinstance(region_payload.get("roads"), dict) else {}
+        region_roads: Dict[str, object] = {}
+        road_ids: List[str] = []
+        for raw_id, road_payload in region_roads_raw.items():
+            road_id = str(raw_id)
+            road_ids.append(road_id)
+            region_roads[road_id] = road_payload
+        if not road_ids:
+            continue
+
+        slug = slugify(region_name or region_id)
+        counter = used_slugs.get(slug, 0)
+        used_slugs[slug] = counter + 1
+        if counter > 0:
+            slug = f"{slug}-{counter}"
+
+        roads_subset: Dict[str, object] = {}
+        for road_id in road_ids:
+            road_data = roads_global.get(road_id)
+            if isinstance(road_data, dict):
+                roads_subset[road_id] = road_data
+                continue
+            road_data = region_roads.get(road_id)
+            if isinstance(road_data, dict):
+                roads_subset[road_id] = road_data
+
+        road_index_subset = [road_index_lookup[road_id] for road_id in road_ids if road_id in road_index_lookup]
+
+        slice_meta = dict(base_meta)
+        slice_meta.update(
+            {
+                "region_count": 1,
+                "road_count": len(roads_subset),
+                "slice_region_id": region_id,
+                "slice_region_name": region_name,
+            }
+        )
+
+        slice_payload = {
+            "meta": slice_meta,
+            "region_index": [entry],
+            "regions": {region_id: region_payload},
+            "road_index": road_index_subset,
+            "roads": roads_subset,
+        }
+
+        target_path = target_root / f"{slug}.json"
+        try:
+            target_path.write_text(json.dumps(slice_payload, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+
 # Carga el perfil de fallback desde disco y valida su contenido.
 def load_fallback_profile(path: Path) -> Dict[str, object]:
     try:
@@ -244,6 +335,13 @@ def build_profiles_via_pandas(
         print(f"[generate_pipeline] No se pudo leer el dataset con pandas ({exc}); usando fallback")
         return None
 
+    segment_index: List[Dict[str, object]] = []
+    segments_lookup: Dict[str, Dict[str, object]] = {}
+    segment_meta = {
+        "source": "derived-from-clean-data",
+        "record_count": 0,
+    }
+
     required_columns = {"road_name", "all_motor_vehicle_count", "hour_of_day", "observation_date"}
     missing_columns = sorted(required_columns.difference(df.columns))
     if missing_columns:
@@ -273,6 +371,75 @@ def build_profiles_via_pandas(
     def _std_pop(series: "pd.Series") -> float:
         value = float(series.std(ddof=0))
         return 0.0 if math.isnan(value) else value
+
+    def _first_string(series: "pd.Series") -> Optional[str]:
+        for value in series:
+            if pd.isna(value):
+                continue
+            value_str = str(value).strip()
+            if value_str and value_str.lower() != "nan":
+                return value_str
+        return None
+
+    def _mean_numeric(series: "pd.Series") -> Optional[float]:
+        numeric = pd.to_numeric(series, errors="coerce").dropna()
+        if numeric.empty:
+            return None
+        return float(numeric.mean())
+
+    def _sum_numeric(series: "pd.Series") -> Optional[float]:
+        numeric = pd.to_numeric(series, errors="coerce").dropna()
+        if numeric.empty:
+            return None
+        return float(numeric.sum())
+
+    if "count_point_identifier" in df.columns:
+        segments_grouped = df.groupby("count_point_identifier", dropna=False)
+        for identifier, group in segments_grouped:
+            if identifier is None:
+                continue
+            identifier_str = str(identifier).strip()
+            if not identifier_str or identifier_str.lower() == "nan":
+                continue
+
+            direction_series = group.get("travel_direction", pd.Series(dtype=object))
+            directions = {
+                str(value).strip()
+                for value in direction_series
+                if pd.notna(value) and str(value).strip() and str(value).strip().lower() != "nan"
+            }
+
+            date_series = group.get("observation_date", pd.Series(dtype=object))
+            dates = pd.to_datetime(date_series, errors="coerce").dropna()
+
+            segment_record = {
+                "segment_id": f"segment:{identifier_str}",
+                "count_point_identifier": identifier_str,
+                "region_name": _first_string(group.get("region_name", pd.Series(dtype=object))),
+                "local_authority_name": _first_string(group.get("local_authority_name", pd.Series(dtype=object))),
+                "road_name": _first_string(group.get("road_name", pd.Series(dtype=object))),
+                "road_type": _first_string(group.get("road_type", pd.Series(dtype=object))),
+                "start_junction_road_name": _first_string(group.get("start_junction_road_name", pd.Series(dtype=object))),
+                "end_junction_road_name": _first_string(group.get("end_junction_road_name", pd.Series(dtype=object))),
+                "latitude": _mean_numeric(group.get("latitude", pd.Series(dtype=float))),
+                "longitude": _mean_numeric(group.get("longitude", pd.Series(dtype=float))),
+                "british_national_grid_easting": _mean_numeric(group.get("british_national_grid_easting", pd.Series(dtype=float))),
+                "british_national_grid_northing": _mean_numeric(group.get("british_national_grid_northing", pd.Series(dtype=float))),
+                "link_length_kilometers": _mean_numeric(group.get("link_length_kilometers", pd.Series(dtype=float))),
+                "link_length_miles": _mean_numeric(group.get("link_length_miles", pd.Series(dtype=float))),
+                "available_directions": ";".join(sorted(directions)) if directions else None,
+                "observation_start_date": dates.min().strftime("%Y-%m-%d") if not dates.empty else None,
+                "observation_end_date": dates.max().strftime("%Y-%m-%d") if not dates.empty else None,
+                "total_observations": int(len(group)),
+                "all_motor_vehicle_total": _sum_numeric(group.get("all_motor_vehicle_count", pd.Series(dtype=float))),
+            }
+
+            segment_index.append(segment_record)
+            segments_lookup[identifier_str] = segment_record
+
+    if segment_index:
+        segment_index.sort(key=lambda item: item.get("count_point_identifier") or "")
+    segment_meta["record_count"] = len(segment_index)
 
     aggregations: Dict[str, Tuple[str, object]] = {
         "observation_count": ("road_name", "size"),
@@ -617,6 +784,11 @@ def build_profiles_via_pandas(
         "regions": regions_payload,
     }
 
+    profiles["meta"]["segment_catalogue"] = segment_meta
+    if segment_index:
+        profiles["segment_index"] = segment_index
+        profiles["segments"] = segments_lookup
+
     if not region_index:
         return None
 
@@ -654,6 +826,7 @@ def ensure_profiles(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(profiles, indent=2), encoding="utf-8")
+    write_region_profile_slices(profiles, output_path.parent / "regions")
     return profiles
 
 
@@ -696,12 +869,12 @@ def build_generator_service(
     kafka_dependencies: Sequence[str],
 ) -> Dict[str, object]:
     region_slug = slugify(region.region_name)
+    slice_path = f"/opt/producer/generated/regions/{region_slug}.json"
     return {
         "build": {"context": "./producer_service"},
         "container_name": f"tf-generator-{region_slug}",
         "environment": {
-            "PROFILES_PATH": "/opt/producer/generated/distributions.json",
-            "PROFILE_OVERRIDE_PATH": "/opt/producer/generated/distributions.json",
+            "PROFILES_PATH": slice_path,
             "PROFILE_STATUS_PATH": f"/opt/producer/generated/status/{region_slug}.json",
             "PRODUCER_REGION_ID": region.region_id,
             "PRODUCER_REGION_NAME": region.region_name,
@@ -741,11 +914,14 @@ def build_pipeline_service(
     status_filename: str,
     container_name: str,
     kafka_dependencies: Sequence[str],
+    *,
+    profile_environment: Optional[Dict[str, str]] = None,
+    profile_volumes: Optional[Sequence[str]] = None,
 ) -> Dict[str, object]:
     topics = ",".join(
         sorted({f"traffic.raw.{slugify(region.region_name)}" for region in regions})
     )
-    return {
+    environment = {
         "build": {"context": "./pipeline_service"},
         "container_name": container_name,
         "environment": {
@@ -760,23 +936,43 @@ def build_pipeline_service(
             "FLUSH_INTERVAL_SECONDS": "20",
             "BATCH_SIZE": "500",
         },
-        "volumes": [
-            "./data/pipeline_status:/opt/pipeline/status",
-        ],
-        "depends_on": {
-            **{dependency: {"condition": "service_started"} for dependency in kafka_dependencies},
-            "namenode": {"condition": "service_started"},
-            "hdfs-bootstrap": {"condition": "service_completed_successfully"},
-        },
-        "mem_limit": "320m",
-        "cpus": "0.45",
-        "networks": ["hadoop"],
-        "restart": "unless-stopped",
     }
+    if profile_environment:
+        environment["environment"].update(profile_environment)
+
+    volumes = ["./data/pipeline_status:/opt/pipeline/status"]
+    if profile_volumes:
+        volumes.extend(profile_volumes)
+
+    environment.update(
+        {
+            "volumes": volumes,
+            "depends_on": {
+                **{dependency: {"condition": "service_started"} for dependency in kafka_dependencies},
+                "namenode": {"condition": "service_started"},
+                "hdfs-bootstrap": {"condition": "service_completed_successfully"},
+            },
+            "mem_limit": "320m",
+            "cpus": "0.45",
+            "networks": ["hadoop"],
+            "restart": "unless-stopped",
+        }
+    )
+    return environment
 
 
 # Genera la definición del dashboard Streamlit.
-def build_dashboard_service(primary_pipeline_service: str) -> Dict[str, object]:
+def build_dashboard_service(
+    primary_pipeline_service: str,
+    extra_dependencies: Sequence[str],
+) -> Dict[str, object]:
+    depends_on = {
+        primary_pipeline_service: {"condition": "service_started"},
+        "namenode": {"condition": "service_started"},
+        "hdfs-bootstrap": {"condition": "service_completed_successfully"},
+    }
+    for dependency in extra_dependencies:
+        depends_on[dependency] = {"condition": "service_started"}
     return {
         "build": {"context": "./dashboard"},
         "container_name": "tf-dashboard",
@@ -789,14 +985,50 @@ def build_dashboard_service(primary_pipeline_service: str) -> Dict[str, object]:
             "STREAM_HISTORY_MINUTES": "180",
             "PROFILE_STATUS_PATH": "/opt/dashboard/generated_profiles/profile_status.json",
             "PROFILE_OVERRIDE_PATH": "/opt/dashboard/generated_profiles/distributions.json",
+            "ML_SERVICE_URL": "http://ml-service:8000",
+            "RESOURCE_SERVICE_URL": "http://resource-management:8000",
         },
-        "depends_on": {
-            primary_pipeline_service: {"condition": "service_started"},
-            "namenode": {"condition": "service_started"},
-            "hdfs-bootstrap": {"condition": "service_completed_successfully"},
-        },
+        "depends_on": depends_on,
         "ports": ["8501:8501"],
-        "volumes": ["./data/generated_profiles:/opt/dashboard/generated_profiles:ro"],
+        "volumes": [
+            "./data/generated_profiles:/opt/dashboard/generated_profiles:ro",
+        ],
+        "networks": ["hadoop"],
+        "restart": "unless-stopped",
+    }
+
+
+def build_ml_service() -> Dict[str, object]:
+    return {
+        "build": {"context": "./ml_service"},
+        "container_name": "tf-ml-service",
+        "environment": {
+            "PROFILES_PATH": "/opt/ml/generated/runtime_distributions.json",
+            "FALLBACK_PROFILES_PATH": "/opt/ml/generated/distributions.json",
+            "STATIC_PROFILES_PATH": "/opt/ml/generated/fallback_distributions.json",
+            "CLEAN_DATA_PATH": "/opt/ml/raw/clean_data.csv",
+        },
+        "volumes": [
+            "./data/generated_profiles:/opt/ml/generated:ro",
+            "./data/raw:/opt/ml/raw:ro",
+        ],
+        "networks": ["hadoop"],
+        "restart": "unless-stopped",
+    }
+
+
+def build_resource_service() -> Dict[str, object]:
+    return {
+        "build": {"context": "./resource_management"},
+        "container_name": "tf-resource-management",
+        "environment": {
+            "DATA_ROOT": "/data",
+            "DOCKER_HOST": "unix:///var/run/docker.sock",
+        },
+        "volumes": [
+            "./data:/data:ro",
+            "/var/run/docker.sock:/var/run/docker.sock:ro",
+        ],
         "networks": ["hadoop"],
         "restart": "unless-stopped",
     }
@@ -818,12 +1050,21 @@ def build_dynamic_services(
             kafka_dependencies=kafka_dependencies,
         )
 
+    runtime_profile_env = {
+        "PROFILE_OUTPUT_PATH": "/opt/pipeline/profiles/runtime_distributions.json",
+        "PROFILE_STATE_PATH": "/opt/pipeline/profiles/runtime_state.json",
+        "PROFILE_MIN_OBSERVATIONS": "3",
+    }
+    runtime_profile_volumes = ["./data/generated_profiles:/opt/pipeline/profiles"]
+
     services["pipeline-primary"] = build_pipeline_service(
         ordered_regions,
         bootstrap_servers=bootstrap_servers,
         status_filename="pipeline-primary.json",
         container_name="tf-pipeline-primary",
         kafka_dependencies=kafka_dependencies,
+        profile_environment=runtime_profile_env,
+        profile_volumes=runtime_profile_volumes,
     )
     services["pipeline-backup"] = build_pipeline_service(
         ordered_regions,
@@ -832,7 +1073,12 @@ def build_dynamic_services(
         container_name="tf-pipeline-backup",
         kafka_dependencies=kafka_dependencies,
     )
-    services["dashboard"] = build_dashboard_service("pipeline-primary")
+    services["ml-service"] = build_ml_service()
+    services["resource-management"] = build_resource_service()
+    services["dashboard"] = build_dashboard_service(
+        "pipeline-primary",
+        extra_dependencies=["ml-service", "resource-management"],
+    )
 
     return services
 

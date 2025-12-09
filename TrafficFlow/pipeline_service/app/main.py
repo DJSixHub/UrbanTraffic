@@ -1,4 +1,4 @@
-"""Entrypoint for the traffic flow Kafka pipeline."""
+# Punto de entrada para ejecutar el pipeline de tráfico basado en Kafka.
 from __future__ import annotations
 
 import sys
@@ -14,7 +14,7 @@ __all__ = [
     "main",
 ]
 
-
+# Carga la configuración y arranca el bucle del pipeline manejando errores de arranque.
 def main() -> int:
     try:
         config = load_config()
