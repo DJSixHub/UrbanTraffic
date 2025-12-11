@@ -884,7 +884,11 @@ def build_generator_service(
             "KAFKA_BOOTSTRAP_SERVERS": bootstrap_servers,
             "KAFKA_TOPIC": f"traffic.raw.{region_slug}",
             "ROTATE_RECORDS": "500",
-            "PRODUCER_SPOOL_PATH": "/opt/producer/spool",
+            "PRODUCER_SPOOL_REMOTE_PATH": f"/data/trafficflow/spool/{region_slug}",
+            "PRODUCER_SPOOL_REMOTE_PATH_SECONDARY": f"/data/trafficflow/spool_backup/{region_slug}",
+            "WEBHDFS_URL": "http://namenode:9870",
+            "WEBHDFS_URL_SECONDARY": "http://namenode:9870",
+            "HDFS_USER": "hdfs",
             "RATE_PER_MINUTE": str(
                 max(
                     int(math.ceil(max(region.baseline_rate, 0.1) * 60)),
@@ -895,10 +899,11 @@ def build_generator_service(
         "volumes": [
             "./data/generated_profiles:/opt/producer/generated:ro",
             "./data/synthetic:/opt/producer/output",
-            f"./data/producer_spool/{region_slug}:/opt/producer/spool",
         ],
         "depends_on": {
-            dependency: {"condition": "service_started"} for dependency in kafka_dependencies
+            **{dependency: {"condition": "service_started"} for dependency in kafka_dependencies},
+            "namenode": {"condition": "service_started"},
+            "hdfs-bootstrap": {"condition": "service_completed_successfully"},
         },
         "mem_limit": "96m",
         "cpus": "0.15",
@@ -917,19 +922,25 @@ def build_pipeline_service(
     *,
     profile_environment: Optional[Dict[str, str]] = None,
     profile_volumes: Optional[Sequence[str]] = None,
+    group_id: str = "trafficflow-pipeline",
+    gold_output_path: str = "/data/gold/management/primary",
+    silver_failover_base_path: Optional[str] = None,
+    gold_failover_output_path: Optional[str] = None,
+    webhdfs_failover_url: Optional[str] = None,
+    build_config: Optional[Dict[str, object]] = None,
+    image_name: Optional[str] = None,
 ) -> Dict[str, object]:
     topics = ",".join(
         sorted({f"traffic.raw.{slugify(region.region_name)}" for region in regions})
     )
-    environment = {
-        "build": {"context": "./pipeline_service"},
+    service: Dict[str, object] = {
         "container_name": container_name,
         "environment": {
             "KAFKA_BOOTSTRAP_SERVERS": bootstrap_servers,
             "KAFKA_TOPICS": topics,
-            "KAFKA_GROUP_ID": "trafficflow-pipeline",
+            "KAFKA_GROUP_ID": group_id,
             "SILVER_BASE_PATH": "/data/silver/regions",
-            "GOLD_OUTPUT_PATH": "/data/gold/management/primary",
+            "GOLD_OUTPUT_PATH": gold_output_path,
             "STATUS_PATH": f"/opt/pipeline/status/{status_filename}",
             "WEBHDFS_URL": "http://namenode:9870",
             "HDFS_USER": "hdfs",
@@ -937,14 +948,28 @@ def build_pipeline_service(
             "BATCH_SIZE": "500",
         },
     }
-    if profile_environment:
-        environment["environment"].update(profile_environment)
+    if build_config:
+        service["build"] = build_config
+    if image_name:
+        service["image"] = image_name
 
-    volumes = ["./data/pipeline_status:/opt/pipeline/status"]
+    if profile_environment:
+        service["environment"].update(profile_environment)
+
+    if silver_failover_base_path:
+        service["environment"]["SILVER_FAILOVER_BASE_PATH"] = silver_failover_base_path
+    if gold_failover_output_path:
+        service["environment"]["GOLD_FAILOVER_OUTPUT_PATH"] = gold_failover_output_path
+    if webhdfs_failover_url:
+        service["environment"]["WEBHDFS_FAILOVER_URL"] = webhdfs_failover_url
+
+    volumes = [
+        "./data/pipeline_status:/opt/pipeline/status",
+    ]
     if profile_volumes:
         volumes.extend(profile_volumes)
 
-    environment.update(
+    service.update(
         {
             "volumes": volumes,
             "depends_on": {
@@ -958,7 +983,7 @@ def build_pipeline_service(
             "restart": "unless-stopped",
         }
     )
-    return environment
+    return service
 
 
 # Genera la definición del dashboard Streamlit.
@@ -980,6 +1005,13 @@ def build_dashboard_service(
             "WEBHDFS_URL": "http://namenode:9870",
             "HDFS_USER": "hdfs",
             "HDFS_BASE_PATH": "/data/gold/management/primary",
+            "HDFS_FAILOVER_PATH": ",".join(
+                [
+                    "/data/gold/management/backup",
+                    "/data/gold/management/primary_failover",
+                    "/data/gold/management/backup_failover",
+                ]
+            ),
             "STREAM_WINDOW_MINUTES": "15",
             "STREAM_REFRESH_SECONDS": "5",
             "STREAM_HISTORY_MINUTES": "180",
@@ -1065,6 +1097,11 @@ def build_dynamic_services(
         kafka_dependencies=kafka_dependencies,
         profile_environment=runtime_profile_env,
         profile_volumes=runtime_profile_volumes,
+        silver_failover_base_path="/data/silver/regions_failover_primary",
+        gold_failover_output_path="/data/gold/management/primary_failover",
+        webhdfs_failover_url="http://namenode:9870",
+        build_config={"context": "./pipeline_service"},
+        image_name="trafficflow-pipeline:latest",
     )
     services["pipeline-backup"] = build_pipeline_service(
         ordered_regions,
@@ -1072,12 +1109,18 @@ def build_dynamic_services(
         status_filename="pipeline-backup.json",
         container_name="tf-pipeline-backup",
         kafka_dependencies=kafka_dependencies,
+        group_id="trafficflow-pipeline-backup",
+        gold_output_path="/data/gold/management/backup",
+        silver_failover_base_path="/data/silver/regions_failover_backup",
+        gold_failover_output_path="/data/gold/management/backup_failover",
+        webhdfs_failover_url="http://namenode:9870",
+        image_name="trafficflow-pipeline:latest",
     )
     services["ml-service"] = build_ml_service()
     services["resource-management"] = build_resource_service()
     services["dashboard"] = build_dashboard_service(
         "pipeline-primary",
-        extra_dependencies=["ml-service", "resource-management"],
+        extra_dependencies=["pipeline-backup", "ml-service", "resource-management"],
     )
 
     return services
@@ -1137,16 +1180,10 @@ def parse_cli() -> argparse.Namespace:
 def ensure_runtime_directories(regions: Sequence[RegionEntry]) -> None:
     base_directories = (
         PROJECT_ROOT / "data" / "pipeline_status",
-        PROJECT_ROOT / "data" / "producer_spool",
         PROJECT_ROOT / "data" / "synthetic",
     )
     for directory in base_directories:
         directory.mkdir(parents=True, exist_ok=True)
-
-    producer_spool_root = PROJECT_ROOT / "data" / "producer_spool"
-    for region in regions:
-        slug = slugify(region.region_name)
-        (producer_spool_root / slug).mkdir(parents=True, exist_ok=True)
 
 
 # Punto de entrada del generador de perfiles y compose.

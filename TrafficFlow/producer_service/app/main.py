@@ -19,6 +19,8 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from kafka import KafkaProducer
 from kafka.errors import KafkaError, KafkaTimeoutError, NoBrokersAvailable
 
+from .webhdfs import WebHDFSClient, WebHDFSException
+
 LOG = logging.getLogger("producer")
 STOP_REQUESTED = False
 SINK_CHOICES = {"file", "kafka"}
@@ -54,6 +56,15 @@ HEAVY_VEHICLE_CATEGORIES = {
     "heavy_goods_vehicle_5_articulated_axles",
     "heavy_goods_vehicle_6_articulated_axles",
 }
+
+
+# Keep a healthy event volume and avoid near-zero emission phases.
+MIN_REGION_RATE_PER_MINUTE = 10.0
+MIN_REGION_RATE_RATIO = 0.75
+STD_TO_MEAN_CAP_RATIO = 0.15
+MIN_ROAD_RATE_PER_MINUTE = 2.0
+
+MIN_ROAD_RATE_RATIO = 0.25
 
 
 # Construye un perfil horario básico con medias y desviaciones uniformes.
@@ -308,9 +319,29 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Destination file for newline-delimited JSON output",
     )
     parser.add_argument(
-        "--spool-path",
-        default=os.environ.get("PRODUCER_SPOOL_PATH", "/opt/producer/spool"),
-        help="Directory used to persist events when Kafka is unavailable",
+        "--spool-remote-path",
+        default=os.environ.get("PRODUCER_SPOOL_REMOTE_PATH"),
+        help="Remote path in HDFS used when the spool backend is hdfs",
+    )
+    parser.add_argument(
+        "--spool-remote-path-secondary",
+        default=os.environ.get("PRODUCER_SPOOL_REMOTE_PATH_SECONDARY"),
+        help="Optional secondary HDFS path used when the primary spool path is unavailable",
+    )
+    parser.add_argument(
+        "--webhdfs-url",
+        default=os.environ.get("WEBHDFS_URL"),
+        help="WebHDFS endpoint for distributed spool operations",
+    )
+    parser.add_argument(
+        "--webhdfs-url-secondary",
+        default=os.environ.get("WEBHDFS_URL_SECONDARY"),
+        help="Optional WebHDFS endpoint paired with the secondary spool path",
+    )
+    parser.add_argument(
+        "--hdfs-user",
+        default=os.environ.get("HDFS_USER", "hdfs"),
+        help="HDFS user used for WebHDFS operations",
     )
     parser.add_argument(
         "--sink",
@@ -725,81 +756,170 @@ class JsonlWriter:
         self._file.flush()
 
 
-# Administra una cola en disco para reintentos de envío.
-class DiskSpool:
-    # Inicializa la carpeta de spool y los archivos auxiliares.
-    def __init__(self, root_path: str) -> None:
-        self.root = Path(root_path)
-        self.queue_file = self.root / "queue.jsonl"
-        self.root.mkdir(parents=True, exist_ok=True)
+@dataclass(frozen=True)
+class HdfsEndpoint:
+    label: str
+    webhdfs_url: str
+    base_path: str
 
-    # Añade un evento a la cola persistente.
+
+@dataclass
+class SpoolConfig:
+    endpoints: List[HdfsEndpoint]
+    hdfs_user: str
+
+
+class HdfsSpool:
+    def __init__(
+        self,
+        label: str,
+        webhdfs_url: str,
+        hdfs_user: str,
+        base_path: str,
+    ) -> None:
+        if not base_path:
+            raise ValueError("Distributed spool requires a base path")
+        if not webhdfs_url:
+            raise ValueError("Distributed spool requires a WebHDFS endpoint")
+        self.label = label
+        self.client = WebHDFSClient(webhdfs_url, user=hdfs_user)
+        normalised = base_path.strip()
+        if not normalised.startswith("/"):
+            normalised = f"/{normalised}"
+        self.base_path = normalised.rstrip("/") or "/"
+
     def append(self, payload: Dict[str, object]) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        with self.queue_file.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, separators=(",", ":")) + "\n")
-
-    # Reprocesa los eventos pendientes intentando reenviarlos.
-    def flush(self, sender: Callable[[Dict[str, object]], None], batch_size: int = 500) -> bool:
-        if not self.queue_file.exists():
-            return True
+        filename = f"{int(time.time() * 1000)}-{uuid.uuid4().hex}.json"
+        target = f"{self.base_path}/{filename}"
         try:
-            lines = self.queue_file.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return False
-        if not lines:
-            try:
-                self.queue_file.unlink()
-            except FileNotFoundError:
-                pass
-            return True
+            self.client.mkdirs(self.base_path)
+            self.client.write_file(target, json.dumps(payload, separators=(",", ":")))
+        except Exception as exc:  # noqa: BLE001 - necesitamos interceptar fallos de red
+            LOG.warning(
+                "Fallo al escribir evento en spool distribuido '%s' (%s): %s",
+                self.label,
+                target,
+                exc,
+            )
+            raise
 
+    def flush(self, sender: Callable[[Dict[str, object]], None], batch_size: int = 500) -> bool:
+        return self._flush_remote(sender, batch_size)
+
+    def has_pending(self) -> bool:
+        try:
+            entries = self.client.list_status(self.base_path)
+            remote_pending = any(entry.get("type") == "FILE" for entry in entries)
+        except Exception as exc:  # noqa: BLE001 - queremos continuar pese a fallos
+            LOG.warning("No se pudo verificar el spool distribuido '%s': %s", self.label, exc)
+            remote_pending = True
+        return remote_pending
+
+    def _flush_remote(self, sender: Callable[[Dict[str, object]], None], batch_size: int) -> bool:
+        try:
+            entries = self.client.list_status(self.base_path)
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("Fallo al listar spool distribuido '%s': %s", self.label, exc)
+            return False
         processed = 0
-        remainder: List[str] = []
-        success = True
-        for index, line in enumerate(lines):
+        for entry in sorted(entries, key=lambda item: item.get("modificationTime", 0)):
+            if entry.get("type") != "FILE":
+                continue
             if batch_size and processed >= batch_size:
-                remainder.extend(lines[index:])
                 break
-            processed += 1
-            if not line.strip():
+            path_suffix = entry.get("pathSuffix")
+            if not isinstance(path_suffix, str):
+                continue
+            target = f"{self.base_path}/{path_suffix}"
+            try:
+                raw = self.client.read_file(target)
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("Fallo al leer spool distribuido '%s' (%s): %s", self.label, target, exc)
                 continue
             try:
-                payload = json.loads(line)
+                payload = json.loads(raw)
             except json.JSONDecodeError:
+                self._safe_delete(target)
                 continue
             try:
                 sender(payload)
-            except Exception:
-                remainder.extend(lines[index:])
-                success = False
-                break
+            except Exception:  # noqa: BLE001 - dejamos el archivo para reintento
+                return False
+            self._safe_delete(target)
+            processed += 1
+        return True
 
+    def _safe_delete(self, target: str) -> None:
         try:
-            if remainder:
-                with self.queue_file.open("w", encoding="utf-8") as handle:
-                    for entry in remainder:
-                        handle.write(entry + "\n")
-            else:
-                self.queue_file.unlink()
-        except OSError:
-            success = False
+            self.client.delete(target)
+        except Exception as exc:  # noqa: BLE001 - eliminación no crítica
+            LOG.debug("No se pudo eliminar %s del spool distribuido '%s': %s", target, self.label, exc)
+
+
+class MultiHdfsSpool:
+    def __init__(self, spools: Sequence[HdfsSpool]) -> None:
+        if not spools:
+            raise ValueError("Distributed spool requires at least one HDFS endpoint")
+        self._spools = list(spools)
+
+    def append(self, payload: Dict[str, object]) -> None:
+        last_error: Optional[Exception] = None
+        for index, spool in enumerate(self._spools):
+            try:
+                spool.append(payload)
+                if index > 0:
+                    LOG.warning(
+                        "Evento almacenado en spool alterno '%s' tras fallo previo",
+                        spool.label,
+                    )
+                return
+            except Exception as exc:  # noqa: BLE001 - se intenta con el siguiente endpoint
+                last_error = exc
+                LOG.warning(
+                    "No se pudo escribir en el spool distribuido '%s': %s",
+                    spool.label,
+                    exc,
+                )
+        if last_error is not None:
+            raise last_error
+
+    def flush(self, sender: Callable[[Dict[str, object]], None], batch_size: int = 500) -> bool:
+        success = True
+        for spool in self._spools:
+            try:
+                success = spool.flush(sender, batch_size) and success
+            except Exception as exc:  # noqa: BLE001 - registramos y continuamos con el resto
+                LOG.warning(
+                    "No se pudo purgar el spool distribuido '%s': %s",
+                    spool.label,
+                    exc,
+                )
+                success = False
         return success
 
-    # Indica si existen eventos pendientes en la cola.
     def has_pending(self) -> bool:
-        return self.queue_file.exists() and self.queue_file.stat().st_size > 0
+        return any(spool.has_pending() for spool in self._spools)
+
+
+def make_spool(config: SpoolConfig) -> MultiHdfsSpool:
+    if not config.endpoints:
+        raise ValueError("Distributed spool requires at least one remote path")
+    spools = [
+        HdfsSpool(endpoint.label, endpoint.webhdfs_url, config.hdfs_user, endpoint.base_path)
+        for endpoint in config.endpoints
+    ]
+    return MultiHdfsSpool(spools)
 
 
 # Produce eventos hacia Kafka gestionando reconexiones y spool.
 class KafkaWriter:
-    # Configura parámetros de Kafka y la cola local.
-    def __init__(self, bootstrap_servers: str, topic: str, spool_path: str) -> None:
+    # Configura parámetros de Kafka y la cola de reintentos.
+    def __init__(self, bootstrap_servers: str, topic: str, spool: object) -> None:
         self.bootstrap_servers = bootstrap_servers
         self.topic = topic
         self._producer: Optional[KafkaProducer] = None
         self._bootstrap_targets = [server.strip() for server in bootstrap_servers.split(",") if server.strip()]
-        self._spool = DiskSpool(spool_path)
+        self._spool = spool
         self._spool_batch = 500
 
     # Abre el productor y drena la cola antes de publicar.
@@ -809,7 +929,7 @@ class KafkaWriter:
             self._drain_backlog()
             LOG.info("Publishing synthetic stream to Kafka topic %s", self.topic)
         else:
-            LOG.warning("Kafka no disponible; se usará cola local hasta recuperar la conexión")
+            LOG.warning("Kafka no disponible; se usará la cola de reintentos hasta recuperar la conexión")
         return self
 
     # Libera recursos de Kafka asegurando flush final.
@@ -848,7 +968,7 @@ class KafkaWriter:
                 max_in_flight_requests_per_connection=1,
             )
         except (NoBrokersAvailable, KafkaTimeoutError, KafkaError) as exc:
-            LOG.warning("Kafka broker no disponible (%s); eventos serán almacenados localmente", exc)
+            LOG.warning("Kafka broker no disponible (%s); eventos serán almacenados en el spool", exc)
             self._producer = None
 
     # Intenta publicar un evento en Kafka retornando el resultado.
@@ -860,7 +980,7 @@ class KafkaWriter:
             future.get(timeout=10)
             return True
         except (KafkaTimeoutError, KafkaError) as exc:
-            LOG.warning("Fallo al publicar en Kafka; evento se envía a cola local (%s)", exc)
+            LOG.warning("Fallo al publicar en Kafka; evento se envía a la cola de reintentos (%s)", exc)
             self._close_producer()
             return False
 
@@ -878,7 +998,7 @@ class KafkaWriter:
             return
         drained = self._spool.flush(self._ensure_delivery, batch_size=self._spool_batch)
         if not drained and self._spool.has_pending():
-            LOG.debug("Persisten eventos pendientes en el spool local (%s)", self._spool.queue_file)
+            LOG.debug("Persisten eventos pendientes en la cola de reintentos para %s", self.topic)
 
     # Garantiza que un evento termine en Kafka o arroje error.
     def _ensure_delivery(self, payload: Dict[str, object]) -> None:
@@ -1088,12 +1208,18 @@ class RegionRecordGenerator:
 
     # Estima la tasa regional para la hora solicitada.
     def _sample_rate(self, hour_profile: RoadHourProfile) -> float:
-        mean = max(hour_profile.mean_per_minute, 0.1)
+        mean = max(hour_profile.mean_per_minute, self.region.baseline_rate_per_minute, 0.1)
         std = hour_profile.std_per_minute
         if std <= 0.0:
             std = max(mean * 0.1, 0.05)
-        rate = self.rng.gauss(mean, std)
-        return max(rate, 0.1)
+        capped_std = min(std, mean * STD_TO_MEAN_CAP_RATIO)
+        rate = self.rng.gauss(mean, capped_std)
+        min_rate = max(
+            mean * MIN_REGION_RATE_RATIO,
+            self.region.baseline_rate_per_minute * MIN_REGION_RATE_RATIO,
+            MIN_REGION_RATE_PER_MINUTE,
+        )
+        return max(rate, min_rate)
 
     # Calcula los pesos relativos de cada carretera de la región.
     def _road_weights(self, hour: int) -> Dict[str, float]:
@@ -1123,13 +1249,17 @@ class RegionRecordGenerator:
             if total_weight > 0.0
             else 1.0 / max(len(weights), 1)
         )
-        road_rate = max(region_rate * probability, 0.05)
+        road_rate = max(
+            region_rate * probability,
+            region_rate * MIN_ROAD_RATE_RATIO,
+            MIN_ROAD_RATE_PER_MINUTE,
+        )
 
         road_generator = self.road_generators[selected_road_id]
         record, _ = road_generator.generate_record(now, road_rate)
         record.setdefault("region_name", self.region.name)
         record["region_id"] = self.region.id
-        delay = max(60.0 / max(region_rate, 0.05), 0.05)
+        delay = max(60.0 / region_rate, 0.05)
         return record, delay, region_rate
 
 
@@ -1195,7 +1325,7 @@ def build_writers(
     output_path: str,
     kafka_bootstrap_servers: str,
     kafka_topic: Optional[str],
-    spool_path: str,
+    spool_config: SpoolConfig,
 ) -> List[object]:
     writers: List[object] = []
     if "file" in sinks:
@@ -1203,7 +1333,8 @@ def build_writers(
     if "kafka" in sinks:
         if not kafka_topic:
             raise ValueError("Kafka topic must be provided when using the kafka sink")
-        writers.append(KafkaWriter(kafka_bootstrap_servers, kafka_topic, spool_path))
+        spool = make_spool(spool_config)
+        writers.append(KafkaWriter(kafka_bootstrap_servers, kafka_topic, spool))
     return writers
 
 
@@ -1235,13 +1366,46 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     region_slug = _slugify(region_profile.name)
     kafka_topic = args.kafka_topic or f"traffic.raw.{region_slug}"
 
+    endpoints: List[HdfsEndpoint] = []
+    if args.spool_remote_path:
+        if not args.webhdfs_url:
+            LOG.error("WEBHDFS_URL must be provided when configuring a distributed spool path")
+            return 1
+        endpoints.append(
+            HdfsEndpoint(
+                label="primary",
+                webhdfs_url=args.webhdfs_url,
+                base_path=args.spool_remote_path,
+            )
+        )
+    if args.spool_remote_path_secondary:
+        secondary_url = args.webhdfs_url_secondary or args.webhdfs_url
+        if not secondary_url:
+            LOG.error(
+                "WEBHDFS_URL_SECONDARY (or WEBHDFS_URL) must be provided when specifying a secondary spool path",
+            )
+            return 1
+        endpoints.append(
+            HdfsEndpoint(
+                label="secondary",
+                webhdfs_url=secondary_url,
+                base_path=args.spool_remote_path_secondary,
+            )
+        )
+
+    if not endpoints:
+        LOG.error("Distributed spool requires at least one remote HDFS path")
+        return 1
+
+    spool_config = SpoolConfig(endpoints=endpoints, hdfs_user=args.hdfs_user)
+
     try:
         writers = build_writers(
             sink_targets,
             output_path=args.output_path,
             kafka_bootstrap_servers=args.kafka_bootstrap_servers,
             kafka_topic=kafka_topic,
-            spool_path=args.spool_path,
+            spool_config=spool_config,
         )
     except (ValueError, KafkaError) as exc:
         LOG.error("Failed to configure output sinks: %s", exc)

@@ -4,6 +4,7 @@ import json
 import math
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
@@ -15,25 +16,23 @@ from fastapi import FastAPI
 
 DATA_ROOT = Path(os.getenv("DATA_ROOT", "/data"))
 PIPELINE_STATUS_ROOT = Path(os.getenv("PIPELINE_STATUS_ROOT", DATA_ROOT / "pipeline_status"))
-PRODUCER_SPOOL_ROOT = Path(os.getenv("PRODUCER_SPOOL_ROOT", DATA_ROOT / "producer_spool"))
 MANAGEMENT_STATUS_ROOT = Path(os.getenv("MANAGEMENT_STATUS_ROOT", DATA_ROOT / "management_status"))
 DOCKER_BASE_URL = os.getenv("DOCKER_HOST", "unix:///var/run/docker.sock")
 DOCKER_TIMEOUT = float(os.getenv("DOCKER_TIMEOUT", "2.5"))
+CONTAINER_STATS_MAX_WORKERS = max(int(os.getenv("CONTAINER_STATS_MAX_WORKERS", "48")), 1)
 
 app = FastAPI(title="TrafficFlow Resource Service", version="0.1.0")
 
 CATEGORY_TITLES: Dict[str, str] = {
     "pipeline": "Pipelines",
-    "producer_spool": "Productores",
     "management_status": "Gestion",
     "docker": "Contenedores",
 }
 
 SECTION_ORDER: Dict[str, int] = {
     "pipeline": 0,
-    "producer_spool": 1,
-    "management_status": 2,
-    "docker": 3,
+    "management_status": 1,
+    "docker": 2,
 }
 
 
@@ -170,89 +169,6 @@ def _summarise_pipeline_status(now: float) -> List[Dict[str, object]]:
     return rows
 
 
-# Analiza los directorios del spool del productor para estimar backlog.
-def _summarise_spool(now: float) -> List[Dict[str, object]]:
-    rows: List[Dict[str, object]] = []
-    if not PRODUCER_SPOOL_ROOT.exists():
-        return rows
-    total_files = 0
-    total_size = 0
-    latest_mtime: Optional[float] = None
-
-    for region_dir in sorted(PRODUCER_SPOOL_ROOT.iterdir()):
-        if not region_dir.is_dir():
-            continue
-        file_count = 0
-        size_bytes = 0
-        newest: Optional[float] = None
-        for file_path in region_dir.glob("*.jsonl"):
-            try:
-                stats = file_path.stat()
-            except OSError:
-                continue
-            size_bytes += stats.st_size
-            file_count += 1
-            newest = max(newest, stats.st_mtime) if newest is not None else stats.st_mtime
-        total_files += file_count
-        total_size += size_bytes
-        if newest is not None:
-            latest_mtime = max(latest_mtime, newest) if latest_mtime is not None else newest
-        status = "idle" if file_count == 0 else "backlog"
-        lag_seconds = float(now - newest) if newest else None
-        human_lag = _humanize_seconds(lag_seconds)
-        metrics = [
-            _make_metric("Archivos pendientes", file_count),
-            _make_metric("Tamano", size_bytes, human=_format_bytes(size_bytes), unit="bytes"),
-        ]
-        if lag_seconds is not None:
-            metrics.append(_make_metric("Edad mas reciente", lag_seconds, human=human_lag, unit="seconds"))
-        summary = _render_metric_summary(metrics)
-        updated_at = (
-            datetime.fromtimestamp(newest, tz=timezone.utc).isoformat()
-            if newest is not None
-            else None
-        )
-        rows.append(
-            {
-                "component": f"producer_spool:{region_dir.name}",
-                "category": "producer_spool",
-                "status": status,
-                "record_count": file_count,
-                "size_bytes": size_bytes,
-                "lag_seconds": lag_seconds,
-                "metrics": metrics,
-                "summary": summary,
-                "human_lag": human_lag,
-                "updated_at": updated_at,
-                "notes": "Sin archivos pendientes" if file_count == 0 else f"{file_count} archivos en cola",
-            }
-        )
-
-    total_lag = float(now - latest_mtime) if latest_mtime else None
-    total_metrics = [
-        _make_metric("Archivos pendientes", total_files),
-        _make_metric("Tamano", total_size, human=_format_bytes(total_size), unit="bytes"),
-    ]
-    if total_lag is not None:
-        total_metrics.append(_make_metric("Edad mas reciente", total_lag, human=_humanize_seconds(total_lag), unit="seconds"))
-    rows.append(
-        {
-            "component": "producer_spool:total",
-            "category": "producer_spool",
-            "status": "idle" if total_files == 0 else "backlog",
-            "record_count": total_files,
-            "size_bytes": total_size,
-            "lag_seconds": total_lag,
-            "metrics": total_metrics,
-            "summary": _render_metric_summary(total_metrics),
-            "human_lag": _humanize_seconds(total_lag),
-            "updated_at": datetime.fromtimestamp(latest_mtime, tz=timezone.utc).isoformat() if latest_mtime else None,
-            "notes": "Sin backlog" if total_files == 0 else f"{total_files} archivos acumulados",
-        }
-    )
-    return rows
-
-
 # Resume la frescura y tamaño de los archivos de estado de gestión.
 def _summarise_management_status(now: float) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
@@ -370,22 +286,50 @@ def _summarise_container_metrics(now: float) -> List[Dict[str, object]]:
                 "rw": float(rw_size) if isinstance(rw_size, (int, float)) else None,
                 "root": float(root_size) if isinstance(root_size, (int, float)) else None,
             }
+
+    def _collect_stats(container: docker.models.containers.Container) -> Dict[str, object]:
+        stats: Dict[str, object] = {}
+        attrs: Dict[str, object] = {}
+        try:
+            stats = container.stats(stream=False)
+        except DockerException:
+            stats = {}
+        try:
+            container.reload()
+        except DockerException:
+            pass
+        try:
+            attrs_raw = container.attrs
+            attrs = attrs_raw if isinstance(attrs_raw, dict) else {}
+        except DockerException:
+            attrs = {}
+        return {
+            "container": container,
+            "stats": stats,
+            "attrs": attrs,
+        }
+
     try:
         try:
             containers = client.containers.list(all=True)
         except DockerException:
             return []
-        for container in containers:
+
+        details: List[Dict[str, object]] = []
+        if containers:
+            worker_count = min(CONTAINER_STATS_MAX_WORKERS, max(len(containers), 1))
+            with ThreadPoolExecutor(max_workers=worker_count) as pool:
+                details = list(pool.map(_collect_stats, containers))
+
+        for entry in details:
+            container = entry.get("container")
+            if not isinstance(container, docker.models.containers.Container):
+                continue
+            stats = entry.get("stats") if isinstance(entry.get("stats"), dict) else {}
+            attrs = entry.get("attrs") if isinstance(entry.get("attrs"), dict) else {}
+
             name = container.name or container.short_id
             status = container.status or "unknown"
-            try:
-                stats = container.stats(stream=False)
-            except DockerException:
-                stats = {}
-            try:
-                inspect = client.api.inspect_container(container.id)
-            except DockerException:
-                inspect = {}
 
             mem_stats = stats.get("memory_stats") if isinstance(stats.get("memory_stats"), dict) else {}
             raw_mem = float(mem_stats.get("usage", 0.0))
@@ -402,12 +346,9 @@ def _summarise_container_metrics(now: float) -> List[Dict[str, object]]:
             if isinstance(io_recursive, list) and io_recursive:
                 storage_bytes = sum(float(item.get("value", 0.0)) for item in io_recursive if isinstance(item, dict))
 
-            size_rw = None
-            started_at = None
-            if isinstance(inspect, dict):
-                size_rw = inspect.get("SizeRw")
-                state = inspect.get("State") if isinstance(inspect.get("State"), dict) else {}
-                started_at = state.get("StartedAt")
+            size_rw = attrs.get("SizeRw") if isinstance(attrs.get("SizeRw"), (int, float)) else None
+            state = attrs.get("State") if isinstance(attrs.get("State"), dict) else {}
+            started_at = state.get("StartedAt")
             if size_rw is None:
                 snapshot_sizes = size_lookup.get(container.id)
                 if snapshot_sizes:
@@ -493,13 +434,12 @@ def health() -> Dict[str, object]:
     }
 
 
-# Genera métricas agregadas de pipeline, spool, gestión y sistema.
+# Genera métricas agregadas de pipeline, gestión y sistema.
 @app.get("/metrics")
 def metrics() -> Dict[str, object]:
     now = time.time()
     rows: List[Dict[str, object]] = []
     rows.extend(_summarise_pipeline_status(now))
-    rows.extend(_summarise_spool(now))
     rows.extend(_summarise_management_status(now))
     rows.extend(_summarise_container_metrics(now))
     collected = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()

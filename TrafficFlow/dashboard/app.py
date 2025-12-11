@@ -18,9 +18,46 @@ import networkx as nx
 import plotly.express as px
 import plotly.graph_objects as go
 
+
+def _normalise_optional_hdfs_path(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    cleaned = cleaned.rstrip("/")
+    if not cleaned:
+        return "/"
+    if not cleaned.startswith("/"):
+        cleaned = f"/{cleaned}"
+    return cleaned
+
+
+def _parse_failover_paths(raw_value: str, *, exclude: Optional[str] = None) -> List[str]:
+    paths: List[str] = []
+    for chunk in raw_value.split(","):
+        candidate = _normalise_optional_hdfs_path(chunk)
+        if not candidate:
+            continue
+        if exclude and candidate == exclude:
+            continue
+        if candidate not in paths:
+            paths.append(candidate)
+    return paths
+
 WEBHDFS_URL = os.getenv("WEBHDFS_URL", "http://localhost:9870").rstrip("/")
 WEBHDFS_DATANODE_URL = os.getenv("WEBHDFS_DATANODE_URL", "").rstrip("/")
-HDFS_BASE_PATH = os.getenv("HDFS_BASE_PATH", "/data/gold/management/primary").rstrip("/") or "/"
+HDFS_BASE_PATH = _normalise_optional_hdfs_path(
+    os.getenv("HDFS_BASE_PATH", "/data/gold/management/primary")
+) or "/"
+HDFS_FAILOVER_PATHS = _parse_failover_paths(
+    os.getenv("HDFS_FAILOVER_PATH", ""),
+    exclude=HDFS_BASE_PATH,
+)
+HDFS_PATH_CANDIDATES: List[str] = [HDFS_BASE_PATH]
+for failover_path in HDFS_FAILOVER_PATHS:
+    if failover_path not in HDFS_PATH_CANDIDATES:
+        HDFS_PATH_CANDIDATES.append(failover_path)
 HDFS_USER = os.getenv("HDFS_USER", "hdfs")
 REFRESH_INTERVAL_SECONDS = float(os.getenv("STREAM_REFRESH_SECONDS", "2"))
 DEFAULT_WINDOW_MINUTES = int(os.getenv("STREAM_WINDOW_MINUTES", "15"))
@@ -121,7 +158,7 @@ def fetch_resource_metrics() -> Optional[Dict[str, object]]:
     if not RESOURCE_SERVICE_URL:
         return None
     try:
-        response = requests.get(f"{RESOURCE_SERVICE_URL}/metrics", timeout=5.0)
+        response = requests.get(f"{RESOURCE_SERVICE_URL}/metrics", timeout=12.0)
         response.raise_for_status()
         payload = response.json()
     except (RequestException, ValueError, json.JSONDecodeError):
@@ -264,9 +301,10 @@ def read_hdfs_file(path: str) -> List[Dict[str, object]]:
 # Descubre los archivos más recientes en el directorio base configurado en HDFS.
 def discover_recent_files() -> List[Dict[str, object]]:
     entries: List[Dict[str, object]] = []
+    seen_paths: set[str] = set()
 
     # Recorre recursivamente directorios en HDFS acumulando archivos recientes.
-    def _walk(base_path: str, depth: int) -> None:
+    def _walk(base_path: str, depth: int, source_root: str) -> None:
         try:
             statuses = list_status(base_path)
         except RuntimeError:
@@ -277,23 +315,30 @@ def discover_recent_files() -> List[Dict[str, object]]:
                 continue
             full_path = f"{base_path}/{suffix}" if base_path != "/" else f"/{suffix}"
             if status.get("type") == "FILE":
+                if full_path in seen_paths:
+                    continue
+                seen_paths.add(full_path)
                 entries.append(
                     {
                         "path": full_path,
                         "length": int(status.get("length", 0)),
                         "mod": int(status.get("modificationTime", 0)),
+                        "source_root": source_root,
                     }
                 )
             elif depth < 3 and status.get("type") == "DIRECTORY":
-                _walk(full_path, depth + 1)
+                _walk(full_path, depth + 1, source_root)
 
-    _walk(HDFS_BASE_PATH, 0)
+    for root in HDFS_PATH_CANDIDATES:
+        base = root or "/"
+        _walk(base, 0, root or "/")
     entries.sort(key=lambda item: item["mod"])
     return entries[-MAX_FILES:]
 
 # Carga los registros nuevos desde HDFS evitando reprocesar archivos ya leídos.
-def fetch_new_records(processed: Dict[str, int]) -> List[Dict[str, object]]:
+def fetch_new_records(processed: Dict[str, int]) -> Tuple[List[Dict[str, object]], Optional[str]]:
     pending: List[Dict[str, object]] = []
+    active_source: Optional[str] = None
     try:
         recent_files = discover_recent_files()
     except RuntimeError as exc:
@@ -302,6 +347,7 @@ def fetch_new_records(processed: Dict[str, int]) -> List[Dict[str, object]]:
     for entry in recent_files:
         path = entry["path"]
         length = entry["length"]
+        source_root = entry.get("source_root")
         if length == 0:
             continue
         known = processed.get(path)
@@ -312,7 +358,9 @@ def fetch_new_records(processed: Dict[str, int]) -> List[Dict[str, object]]:
             continue
         processed[path] = length
         pending.extend(records)
-    return pending
+        if active_source is None and isinstance(source_root, str):
+            active_source = source_root
+    return pending, active_source
 
 # Normaliza los registros brutos en un DataFrame con columnas estándar y tipos seguros.
 def normalise_records(rows: List[Dict[str, object]]) -> pd.DataFrame:
@@ -1150,7 +1198,8 @@ def main() -> None:
     st.set_page_config(page_title="Monitor de tráfico TrafficFlow", layout="wide")
     st.title("Monitor de tráfico en vivo")
     _render_profile_banner()
-    st.caption(f"Monitoreando ruta HDFS {HDFS_BASE_PATH}")
+    monitored_paths = ", ".join(HDFS_PATH_CANDIDATES)
+    st.caption(f"Monitoreando rutas HDFS: {monitored_paths}")
 
     window_minutes = DEFAULT_WINDOW_MINUTES
     refresh_seconds = REFRESH_INTERVAL_SECONDS
@@ -1167,13 +1216,20 @@ def main() -> None:
         st.session_state.increment_history = pd.DataFrame(
             columns=["timestamp", "vehicles_new", "vehicles_avg_region"]
         )
+    if "active_hdfs_source" not in st.session_state:
+        st.session_state.active_hdfs_source = HDFS_BASE_PATH
 
     error_message = None
     new_payload: List[Dict[str, object]] = []
+    new_source: Optional[str] = None
     try:
-        new_payload = fetch_new_records(st.session_state.processed_files)
+        new_payload, new_source = fetch_new_records(st.session_state.processed_files)
     except RuntimeError as exc:
         error_message = str(exc)
+
+    if new_source:
+        st.session_state.active_hdfs_source = new_source
+    st.caption(f"Fuente HDFS activa: {st.session_state.active_hdfs_source}")
 
     vehicles_added = 0.0
     avg_per_region = float("nan")

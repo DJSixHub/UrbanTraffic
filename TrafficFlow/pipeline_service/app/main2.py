@@ -16,8 +16,9 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import requests
 from kafka import KafkaConsumer
+from kafka.admin import KafkaAdminClient, NewTopic
 from kafka.coordinator.assignors.roundrobin import RoundRobinPartitionAssignor
-from kafka.errors import KafkaError
+from kafka.errors import KafkaError, TopicAlreadyExistsError
 from kafka.structs import OffsetAndMetadata, TopicPartition
 
 from .profile_updater import RuntimeProfileUpdater
@@ -132,10 +133,16 @@ class Config:
     flush_interval_seconds: int
     batch_size: int
     log_level: str
+    topic_partitions: int
+    topic_replication_factor: int
+    topic_creation_timeout_seconds: int
     consumer_timeout_ms: int = DEFAULT_CONSUMER_TIMEOUT_MS
     profile_output_path: Optional[Path] = None
     profile_state_path: Optional[Path] = None
     profile_min_observations: int = 1
+    silver_failover_base_path: Optional[str] = None
+    gold_failover_output_path: Optional[str] = None
+    webhdfs_failover_url: Optional[str] = None
 
 
 @dataclass
@@ -190,8 +197,60 @@ def _serialize_records(records: Iterable[Dict[str, object]]) -> str:
     return "\n".join(json.dumps(record, separators=(",", ":")) for record in records) + "\n"
 
 
+def _join_hdfs_path(base: str, relative: str) -> str:
+    base_clean = (base or "/").strip()
+    if not base_clean.startswith("/"):
+        base_clean = f"/{base_clean}"
+    base_clean = base_clean.rstrip("/")
+    relative_clean = relative.lstrip("/")
+    if not relative_clean:
+        return base_clean or "/"
+    if base_clean in ("", "/"):
+        return f"/{relative_clean}"
+    return f"{base_clean}/{relative_clean}"
+
+
+def _write_with_failover(
+    primary_client: WebHDFSClient,
+    failover_client: Optional[WebHDFSClient],
+    primary_path: str,
+    data: str,
+    *,
+    kind: str,
+    failover_path: Optional[str] = None,
+    failover_data: Optional[str] = None,
+) -> Tuple[bool, str]:
+    primary_dir = os.path.dirname(primary_path) or "/"
+    try:
+        primary_client.mkdirs(primary_dir)
+        primary_client.write_file(primary_path, data)
+        return False, primary_path
+    except (WebHDFSException, requests.RequestException) as primary_exc:
+        if not failover_client or not failover_path:
+            raise
+        failover_dir = os.path.dirname(failover_path) or "/"
+        try:
+            failover_client.mkdirs(failover_dir)
+            payload = failover_data if failover_data is not None else data
+            failover_client.write_file(failover_path, payload)
+        except (WebHDFSException, requests.RequestException) as failover_exc:
+            raise failover_exc
+        LOG.warning(
+            "Conmutación activada para escritura %s: %s → %s (%s)",
+            kind,
+            primary_path,
+            failover_path,
+            primary_exc,
+        )
+        return True, failover_path
+
+
 # Calcula agregados por región y autoridad para la capa gold.
-def aggregate_events(events: Sequence[Dict[str, object]], batch_id: int) -> List[Dict[str, object]]:
+def aggregate_events(
+    events: Sequence[Dict[str, object]],
+    batch_id: int,
+    writer_failover_active: bool = False,
+) -> List[Dict[str, object]]:
     region_rollups: Dict[Tuple[str, datetime], Dict[str, object]] = {}
     authority_rollups: Dict[Tuple[str, str, datetime], Dict[str, object]] = {}
     road_rollups: Dict[Tuple[str, str, str, datetime], Dict[str, object]] = {}
@@ -332,7 +391,7 @@ def aggregate_events(events: Sequence[Dict[str, object]], batch_id: int) -> List
                 "batch_timestamp": int(minute_key.timestamp()),
                 "event_timestamp": minute_key.isoformat(),
                 "role": "primary",
-                "writer_failover_active": False,
+                "writer_failover_active": writer_failover_active,
             }
         )
         results.append(entry)
@@ -355,7 +414,7 @@ def aggregate_events(events: Sequence[Dict[str, object]], batch_id: int) -> List
                 "batch_timestamp": int(minute_key.timestamp()),
                 "event_timestamp": minute_key.isoformat(),
                 "role": "authority",
-                "writer_failover_active": False,
+                "writer_failover_active": writer_failover_active,
             }
         )
         results.append(entry)
@@ -376,7 +435,7 @@ def aggregate_events(events: Sequence[Dict[str, object]], batch_id: int) -> List
                 "batch_timestamp": int(minute_key.timestamp()),
                 "event_timestamp": minute_key.isoformat(),
                 "role": "road",
-                "writer_failover_active": False,
+                "writer_failover_active": writer_failover_active,
             }
         )
         results.append(entry)
@@ -384,13 +443,14 @@ def aggregate_events(events: Sequence[Dict[str, object]], batch_id: int) -> List
     return results
 
 # Actualiza el archivo local de estado del pipeline.
-def write_status(config: Config, batch_id: int, total_events: int, gold_rows: int) -> None:
+def write_status(config: Config, batch_id: int, total_events: int, gold_rows: int, writer_failover: bool) -> None:
     payload = {
         "batch_id": batch_id,
         "last_flush_time": time.time(),
         "total_events": total_events,
         "gold_records": gold_rows,
         "kafka_topics": list(config.kafka_topics),
+        "writer_failover_active": writer_failover,
     }
     try:
         config.status_path.parent.mkdir(parents=True, exist_ok=True)
@@ -408,6 +468,18 @@ def flush_batches(
     if not events:
         return 0
 
+    failover_client: Optional[WebHDFSClient] = None
+    if config.webhdfs_failover_url:
+        try:
+            failover_client = WebHDFSClient(
+                base_url=config.webhdfs_failover_url,
+                user=config.hdfs_user,
+                timeout=getattr(client, "timeout", 30.0),
+            )
+        except Exception as exc:  # noqa: BLE001 - no queremos bloquear el pipeline por errores locales
+            LOG.error("Failed to initialize failover WebHDFS client: %s", exc)
+
+    writer_failover = False
     silver_groups: Dict[Tuple[str, str, str, str], List[Dict[str, object]]] = defaultdict(list)
     for event in events:
         region_name = str(event.get("region_name") or "Unknown")
@@ -420,21 +492,70 @@ def flush_batches(
         silver_groups[key].append(event)
 
     for (region_slug, dt_value, hour_value, minute_value), records in silver_groups.items():
-        directory = f"{config.silver_base_path}/{region_slug}/dt={dt_value}/hour={hour_value}"
+        relative_directory = f"{region_slug}/dt={dt_value}/hour={hour_value}"
         filename = f"{region_slug}_{dt_value}{hour_value}{minute_value}_{uuid.uuid4().hex}.jsonl"
-        target = f"{directory}/{filename}".replace("//", "/")
-        client.mkdirs(directory)
-        client.write_file(target, _serialize_records(records))
-        LOG.debug("Wrote %s silver records to %s", len(records), target)
+        relative_path = f"{relative_directory}/{filename}"
+        primary_path = _join_hdfs_path(config.silver_base_path, relative_path)
+        failover_path = None
+        if failover_client and config.silver_failover_base_path:
+            failover_path = _join_hdfs_path(config.silver_failover_base_path, relative_path)
+        payload = _serialize_records(records)
+        try:
+            failover_triggered, target_path = _write_with_failover(
+                client,
+                failover_client if failover_path else None,
+                primary_path,
+                payload,
+                kind="silver",
+                failover_path=failover_path,
+            )
+            if failover_triggered:
+                writer_failover = True
+            LOG.debug("Wrote %s silver records to %s", len(records), target_path)
+        except (WebHDFSException, requests.RequestException) as exc:
+            LOG.error("Failed to persist silver records to HDFS: %s", exc)
+            raise
 
-    client.mkdirs(config.gold_output_path)
-    gold_records = aggregate_events(events, batch_id)
-    gold_target = f"{config.gold_output_path}/batch_{int(time.time())}_{batch_id}.jsonl"
-    client.write_file(gold_target, _serialize_records(gold_records))
+    gold_records = aggregate_events(events, batch_id, writer_failover_active=False)
+    gold_filename = f"batch_{int(time.time())}_{batch_id}.jsonl"
+    gold_primary_path = _join_hdfs_path(config.gold_output_path, gold_filename)
+    gold_failover_path = None
+    gold_failover_payload: Optional[str] = None
+    if failover_client and config.gold_failover_output_path:
+        gold_failover_path = _join_hdfs_path(config.gold_failover_output_path, gold_filename)
+        failover_records = [
+            {**record, "writer_failover_active": True}
+            for record in gold_records
+        ]
+        gold_failover_payload = _serialize_records(failover_records)
+
+    primary_payload = _serialize_records(gold_records)
+    gold_failover_triggered = False
+    gold_target = gold_primary_path
+    try:
+        gold_failover_triggered, gold_target = _write_with_failover(
+            client,
+            failover_client if gold_failover_path else None,
+            gold_primary_path,
+            primary_payload,
+            kind="gold",
+            failover_path=gold_failover_path,
+            failover_data=gold_failover_payload,
+        )
+    except (WebHDFSException, requests.RequestException) as exc:
+        LOG.error("Failed to persist gold records to HDFS: %s", exc)
+        raise
+
+    if gold_failover_triggered:
+        writer_failover = True
+    for record in gold_records:
+        record["writer_failover_active"] = gold_failover_triggered
+
     LOG.info("Wrote %s gold records to %s", len(gold_records), gold_target)
 
-    write_status(config, batch_id, len(events), len(gold_records))
-    return len(gold_records)
+    gold_count = len(gold_records)
+    write_status(config, batch_id, len(events), gold_count, writer_failover)
+    return gold_count
 
 # Procesa un lote y confirma offsets si la escritura fue exitosa.
 def _flush_and_commit(
@@ -479,6 +600,94 @@ def _flush_and_commit(
         return False
     return True
 
+
+# Garantiza que los tópicos necesarios existan en Kafka antes de consumir.
+def ensure_topics(config: Config) -> None:
+    try:
+        admin = KafkaAdminClient(
+            bootstrap_servers=list(config.kafka_bootstrap_servers),
+            client_id="trafficflow-pipeline-admin",
+        )
+    except KafkaError as exc:
+        LOG.warning("Kafka admin client unavailable; skipping topic sync: %s", exc)
+        return
+
+    timeout_ms = max(1000, int(config.topic_creation_timeout_seconds * 1000))
+    def _safe_list_topics() -> set[str]:
+        try:
+            topics = admin.list_topics()
+        except KafkaError as exc:
+            LOG.warning("Failed to list Kafka topics: %s", exc)
+            return set()
+        if isinstance(topics, set):
+            return topics
+        if isinstance(topics, (list, tuple)):
+            return set(topics)
+        return set(topics or [])
+
+    existing_topics = _safe_list_topics()
+
+    required_topics = list(config.kafka_topics)
+    missing_topics = [topic for topic in required_topics if topic not in existing_topics]
+
+    def _create(topics: Sequence[str], replication_factor: int) -> Dict[str, KafkaError]:
+        if not topics:
+            return {}
+        new_topics = [
+            NewTopic(name=topic, num_partitions=config.topic_partitions, replication_factor=replication_factor)
+            for topic in topics
+        ]
+        try:
+            futures = admin.create_topics(new_topics=new_topics, timeout_ms=timeout_ms)
+        except KafkaError as exc:
+            return {topic: exc for topic in topics}
+
+        failures: Dict[str, KafkaError] = {}
+        for topic, future in futures.items():
+            try:
+                future.result(timeout=config.topic_creation_timeout_seconds)
+                LOG.debug("Kafka topic ensured: %s", topic)
+            except TopicAlreadyExistsError:
+                LOG.debug("Kafka topic already exists: %s", topic)
+            except KafkaError as exc:
+                failures[topic] = exc
+        return failures
+
+    failures = _create(missing_topics, config.topic_replication_factor)
+    if failures and config.topic_replication_factor > 1:
+        LOG.warning(
+            "Topic creation failed with replication factor %s (%s); retrying with replication factor 1",
+            config.topic_replication_factor,
+            ", ".join(f"{topic}:{error}" for topic, error in failures.items()),
+        )
+        fallback_failures = _create(list(failures.keys()), 1)
+        failures.update(fallback_failures)
+
+    if failures:
+        LOG.error(
+            "Failed to ensure Kafka topics exist: %s",
+            ", ".join(f"{topic}:{error}" for topic, error in failures.items()),
+        )
+
+    if missing_topics and not failures:
+        LOG.info("Created Kafka topics: %s", ", ".join(missing_topics))
+
+    deadline = time.time() + config.topic_creation_timeout_seconds
+    current_topics = existing_topics
+    while time.time() < deadline:
+        refreshed = _safe_list_topics()
+        if refreshed:
+            current_topics = refreshed
+        if all(topic in current_topics for topic in required_topics):
+            break
+        time.sleep(1)
+    else:
+        missing = [topic for topic in required_topics if topic not in current_topics]
+        if missing:
+            LOG.warning("Kafka metadata sync incomplete for topics: %s", ", ".join(missing))
+
+    admin.close()
+
 # Orquesta el consumo continuo desde Kafka y el envío a HDFS.
 def run_pipeline(config: Config) -> int:
     configure_logging(config.log_level)
@@ -496,6 +705,8 @@ def run_pipeline(config: Config) -> int:
             state_path,
             min_observations=config.profile_min_observations,
         )
+
+    ensure_topics(config)
 
     try:
         consumer = KafkaConsumer(
@@ -622,6 +833,9 @@ def load_config() -> Config:
     profile_output_raw = os.getenv("PROFILE_OUTPUT_PATH")
     profile_state_raw = os.getenv("PROFILE_STATE_PATH")
     profile_min_obs = max(1, _parse_int_env("PROFILE_MIN_OBSERVATIONS", 3))
+    topic_partitions = max(1, _parse_int_env("KAFKA_TOPIC_PARTITIONS", 3))
+    topic_replication = max(1, _parse_int_env("KAFKA_TOPIC_REPLICATION_FACTOR", 3))
+    topic_timeout = max(5, _parse_int_env("KAFKA_TOPIC_CREATION_TIMEOUT_SECONDS", 30))
     profile_output_path = Path(profile_output_raw) if profile_output_raw else None
     profile_state_path = Path(profile_state_raw) if profile_state_raw else None
 
@@ -637,6 +851,9 @@ def load_config() -> Config:
         flush_interval_seconds=flush_interval,
         batch_size=batch_size,
         log_level=log_level,
+        topic_partitions=topic_partitions,
+        topic_replication_factor=topic_replication,
+        topic_creation_timeout_seconds=topic_timeout,
         consumer_timeout_ms=consumer_timeout,
         profile_output_path=profile_output_path,
         profile_state_path=profile_state_path,

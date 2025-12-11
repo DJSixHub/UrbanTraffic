@@ -1,6 +1,6 @@
 # TrafficFlow · Plataforma Distribuida
 
-TrafficFlow levanta una cadena moderna de ingesta: generadores sintéticos por región publican eventos en un clúster Kafka tolerante a fallos, un pipeline redundante escribe los resultados en HDFS (capas *silver* y *gold*) y un dashboard Streamlit ofrece visibilidad en tiempo real. El `docker-compose.yaml` se regenera con `scripts/generate_pipeline.py` para mantener servicios y límites alineados con los perfiles vigentes.
+TrafficFlow levanta una cadena moderna de ingesta: generadores sintéticos por región publican eventos en un clúster Kafka tolerante a fallos, un pipeline redundante escribe los resultados en HDFS (capas *silver* y *gold*) y un dashboard Streamlit ofrece visibilidad en tiempo real. El `docker-compose.yaml` se regenera con `scripts/generate_pipeline.py` para mantener servicios y límites alineados con los perfiles vigentes, y los generadores se han ajustado para sostener un caudal alto y estable en cada tick del dashboard.
 
 ## Requisitos previos
 - Docker Desktop (o Engine 24+) con Docker Compose v2
@@ -17,16 +17,17 @@ TrafficFlow levanta una cadena moderna de ingesta: generadores sintéticos por r
 - Los volúmenes montados sobre `./data` exponen las salidas de HDFS al host y conservan el estado entre reinicios.
 
 ### 3. Generación de eventos
-- Cada contenedor `tf-generator-<slug>` lee su perfil, calcula la carga esperada por minuto y publica eventos JSON en `traffic.raw.<región>`.
-- Cuando Kafka no responde, los generadores almacenan temporalmente los eventos en `data/producer_spool/<región>` y los reenvían al recuperar la conectividad.
+- Cada contenedor `tf-generator-<slug>` lee su perfil, calcula la carga esperada por minuto y publica eventos JSON en `traffic.raw.<región>`. La cadencia mínima reforzada garantiza que cada actualización del dashboard incluya múltiples eventos por región.
+- Cuando Kafka no responde, los generadores persisten los eventos en `/data/trafficflow/spool/<región>` dentro de HDFS mediante WebHDFS y los reenvían al recuperar la conectividad.
 
 ### 4. Ingesta y persistencia
 - `tf-pipeline-primary` y `tf-pipeline-backup` comparten el grupo `trafficflow-pipeline`, procesan los tópicos regionales y escriben la capa *silver* particionada por fecha y hora.
-- Tras cada lote consolidado, calculan agregados *gold* por región (`role=primary`) y por autoridad local (`role=authority`). Si HDFS no está disponible, el lote se conserva en `data/pipeline_spool` hasta poder persistirlo.
+- Tras cada lote consolidado, calculan agregados *gold* por región (`role=primary`) y por autoridad local (`role=authority`).
 
 ### 5. Observabilidad y análisis
 - `tf-dashboard` expone `http://localhost:8501`, consulta WebHDFS con `WEBHDFS_URL` y presenta métricas globales, regionales y de autoridad local cuando los agregados están disponibles.
 - El dashboard muestra el origen de los perfiles activos y permite validar visualmente el avance del pipeline sin intervenir contenedores.
+- Con la configuración actual, cada intervalo acumula cientos de eventos distribuidos entre regiones, evitando periodos planos en las gráficas.
 
 ### 6. Apagado controlado
 - `docker compose down` detiene los servicios conservando volúmenes; añade `-v` para una limpieza completa (útil al regenerar perfiles o reiniciar Kafka desde cero).
@@ -41,7 +42,7 @@ TrafficFlow levanta una cadena moderna de ingesta: generadores sintéticos por r
 
 ## Tolerancia a fallos
 - **Kafka con réplica interna** asegura quórum con tres nodos; la cadena `KAFKA_BOOTSTRAP_SERVERS` de los productores detecta al líder vigente.
-- **Spool en productores** evita pérdida de eventos cuando Kafka cae guardándolos en disco y reprocesándolos al reconectar.
+- **Spool en productores** evita pérdida de eventos cuando Kafka cae guardándolos en HDFS y reprocesándolos al reconectar.
 - **Pipeline activo-activo** mantiene dos consumidores sincronizados; si uno se detiene, el otro asume todas las particiones sin intervención manual.
 - **Dashboard sin estado** puede reiniciarse en cualquier momento y reconstruye su vista leyendo directamente de HDFS.
 
@@ -63,7 +64,7 @@ TrafficFlow levanta una cadena moderna de ingesta: generadores sintéticos por r
 - `data/pipeline_status/pipeline-primary.json` y `.../pipeline-backup.json` muestran el último lote procesado por cada consumidor.
 - Si un generador reinicia en bucle, revisa permisos de `data/generated_profiles` y el estado del clúster Kafka (`docker compose ps tf-kafka-*`).
 - Cuando aparezca `NoBrokersAvailable`, asegúrate de que al menos dos nodos Kafka estén levantados y compartan el mismo `KAFKA_KRAFT_CLUSTER_ID`.
-- Lotes en espera se acumulan en `data/pipeline_spool`; se vacían automáticamente al recuperar WebHDFS.
+- Los eventos retenidos en el spool distribuido pueden listarse con `hdfs dfs -ls /data/trafficflow/spool`.
 - El dashboard refleja si los perfiles actuales provienen de CSV o del fallback para identificar el origen de la simulación.
 
 ## Comandos por etapa
@@ -78,6 +79,37 @@ TrafficFlow levanta una cadena moderna de ingesta: generadores sintéticos por r
 | 7. Kafka | Listar tópicos y confirmar quórum | `docker compose exec tf-kafka-primary kafka-topics.sh --bootstrap-server tf-kafka-primary:9092 --list` |
 | 8. Estado general | Ver contenedores activos y su estado | `docker compose ps` |
 | 9. Apagado | Detener servicios y eliminar volúmenes | `docker compose down -v` |
-| 10. Spool local | Revisar lotes pendientes en disco | `Get-ChildItem data\pipeline_spool` |
+| 10. Spool distribuido | Revisar eventos pendientes en HDFS | `docker compose exec tf-namenode hdfs dfs -ls /data/trafficflow/spool` |
+
+## Control puntual de servicios
+| Acción | Servicios | Comando |
+| --- | --- | --- |
+| Detener un generador concreto | `tf-generator-<region>` | `docker compose stop tf-generator-<region>` |
+| Arrancar solo un generador | `tf-generator-<region>` | `docker compose start tf-generator-<region>` |
+| Recrear un generador tras cambios | `tf-generator-<region>` | `docker compose up -d --build tf-generator-<region>` |
+| Reiniciar el pipeline activo | `tf-pipeline-primary` | `docker compose restart tf-pipeline-primary` |
+| Suspender el pipeline de respaldo | `tf-pipeline-backup` | `docker compose stop tf-pipeline-backup` |
+| Levantar únicamente Kafka | `tf-kafka-primary tf-kafka-secondary tf-kafka-tertiary` | `docker compose start tf-kafka-primary tf-kafka-secondary tf-kafka-tertiary` |
+| Detener HDFS con orden | `tf-namenode tf-datanode-a tf-datanode-b tf-datanode-c` | `docker compose stop tf-namenode tf-datanode-a tf-datanode-b tf-datanode-c` |
+
+## Logs y supervisión rápida
+- Generadores por región: `docker compose logs tf-generator-<region> -f --tail 120`
+- Pipeline principal: `docker compose logs tf-pipeline-primary -f --tail 150`
+- Pipeline de respaldo: `docker compose logs tf-pipeline-backup -f --tail 150`
+- Brokers Kafka: `docker compose logs tf-kafka-primary -f --tail 150`
+- HDFS NameNode: `docker compose logs tf-namenode -f --tail 150`
+- Dashboard Streamlit: `docker compose logs tf-dashboard -f --tail 120`
+
+Comprobaciones puntuales sin seguir logs:
+- Último lote procesado: `docker compose exec tf-pipeline-primary cat /app/status/pipeline-primary.json`
+- Estado del grupo de consumo: `docker compose exec tf-kafka-primary kafka-consumer-groups.sh --bootstrap-server tf-kafka-primary:9092 --describe --group trafficflow-pipeline`
+- Conteo de spool pendiente: `docker compose exec tf-namenode hdfs dfs -count /data/trafficflow/spool`
+
+## Visualizar cómo se generan los datos
+- Listar particiones *silver* recientes: `docker compose exec tf-namenode hdfs dfs -ls /data/silver/regions`
+- Inspeccionar un archivo silver: `docker compose exec tf-namenode hdfs dfs -tail /data/silver/regions/London/region=london/date=2025-12-11/hour=15/*.jsonl`
+- Revisar agregados *gold*: `docker compose exec tf-namenode hdfs dfs -ls /data/gold/management/primary`
+- Ver contenido de un lote *gold*: `docker compose exec tf-namenode hdfs dfs -head /data/gold/management/primary/batch_*.jsonl`
+- Auditar eventos locales en el host (PowerShell): `Get-ChildItem data\synthetic -Filter *.jsonl | Select-Object -First 5`
 
 Con estas secciones y comandos puedes desplegar la plataforma completa, supervisar cada tramo del pipeline y realizar tareas de mantenimiento sin depender de artefactos o flujos obsoletos.

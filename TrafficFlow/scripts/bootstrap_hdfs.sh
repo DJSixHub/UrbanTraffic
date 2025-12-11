@@ -29,8 +29,15 @@ hdfs dfs -mkdir -p /data/gold/regions/groups
 hdfs dfs -mkdir -p /data/gold/management
 hdfs dfs -mkdir -p /data/checkpoints
 hdfs dfs -mkdir -p /data/gold/synthetic
+hdfs dfs -mkdir -p /data/trafficflow/spool
+hdfs dfs -mkdir -p /data/trafficflow/spool_backup
+hdfs dfs -mkdir -p /data/silver/regions_failover_primary
+hdfs dfs -mkdir -p /data/silver/regions_failover_backup
+hdfs dfs -mkdir -p /data/gold/management/primary_failover
+hdfs dfs -mkdir -p /data/gold/management/backup_failover
 
 echo "[bootstrap] Setting ownership on /data"
 hdfs dfs -chown -R hdfs:hdfs /data
+hdfs dfs -chown -R hdfs:hdfs /data/trafficflow
 
 echo "[bootstrap] Done"
